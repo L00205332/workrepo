@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# Security: never commit credentials or account-specific secrets.
+# This repository is PUBLIC.
+# ---------------------------------------------------------------------------
+.aws/
+*.pem
+*.key
+*.pfx
+.env
+.env.*
+!.env.example
+*credentials*
+*secret*
+!**/*secret*.md
+
+# Local-only parameter overrides (may contain account IDs, IPs, key names).
+# Commit generic examples as parameters/*.example.json instead.
+parameters/*.local.json
+
+# ---------------------------------------------------------------------------
+# CloudFormation / AWS CLI build artefacts
+# ---------------------------------------------------------------------------
+packaged*.yaml
+packaged*.yml
+.aws-sam/
+cfn-output*.json
+
+# ---------------------------------------------------------------------------
+# Python (cfn-lint, helper scripts)
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---------------------------------------------------------------------------
+# Editors and OS files
+# ---------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Assignment brief is copyright of the lecturer; keep it out of the public repo.
+*.pdf

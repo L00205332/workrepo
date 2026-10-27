@@ -1,0 +1,11 @@
+# Normalise line endings so diffs are clean between Windows and the Linux CI runners.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets are never modified.
+*.png binary
+*.jpg binary
+*.ico binary
