@@ -136,6 +136,34 @@ write-up. Gave me the git commands to update the remote URL after the rename and
 
 ---
 
+### P9 (2026-10-27): `gh` not recognised when creating the PR
+
+**Prompt:**
+> `gh pr create --base main --title "chore: project setup" ...` → "The term 'gh' is not recognized
+> as the name of a cmdlet..." (PowerShell error output pasted)
+
+**LLM response (summary):** Checked the repo state: the commit and the push of
+`chore/project-setup` had worked. Found that the repo was still named `workrepo` on GitHub (the
+rename had not been saved) and the remote still pointed there. Explained that the terminal had
+not picked up the new PATH and gave fixes: open a new terminal, or call `gh` by its full path, or
+open the PR in the browser.
+
+**My action:** _(fill in)_
+
+---
+
+### P10 (2026-10-27): Keep the repo name
+
+**Prompt:**
+> i won't rename the repo as it's shared with Ruth my instructor.
+
+**LLM response (summary):** Agreed. The repo stays `L00205332/workrepo`, and the existing remote
+URL is already correct, so no changes are needed.
+
+**My action:** Kept the original repo name so the link shared with my instructor stays stable.
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title
