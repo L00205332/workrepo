@@ -16,15 +16,54 @@ This README is the lab write-up for the assignment.
 
 ---
 
-## 1. Overview
+## 1. Declared tutorials and LLM usage
 
-_TODO: a short summary of what the project delivers._
+> **Declaration (assignment brief, Part A Q2):** an LLM was used for this assignment. Every
+> prompt is declared, word for word, in **[PROMPTS.md](PROMPTS.md)**, together with a summary
+> of the response and what I did with it ("My action").
+
+| Item | Declaration |
+|------|-------------|
+| LLM used | **Claude Code** (model Claude Opus 5.5), in the Claude desktop app |
+| Prompts | 24 logged entries (P1 to P24) in [PROMPTS.md](PROMPTS.md). Troubleshooting exchanges and evidence sharing are not logged. |
+| Tutorials | None followed. The only external tutorial-style source is the AWS Lambda IaC page quoted in the brief (entry T1 in [PROMPTS.md](PROMPTS.md)). |
+| Third-party templates | None |
+
+**How the LLM was used:**
+
+- To generate the **baseline** templates (the single-file static site and the three-tier stack).
+- To explain concepts and options when I asked: Part A(a) vs A(b), packaging and nested
+  stacks, branching strategy, CI policy.
+- To implement the changes **I chose**, and to review evidence and diagnose test findings.
+
+**What I did myself:**
+
+- I made every design decision:
+  - the modular nested-stack layout and the separate `loadbalancer` module;
+  - Multi-AZ RDS over Aurora;
+  - the four "next level" improvements;
+  - an advisory cfn-nag;
+  - always deploying from `main`;
+  - destroying every stack after each session.
+- I reviewed the code before every deployment.
+- I ran **every** git commit, push and pull request (section 9) and **every** AWS deployment,
+  test and clean-up command myself. The LLM never committed code.
+- I took the console and browser screenshots used as evidence.
+
+## 2. Overview
+
+In this project I have delivered the following parts:
 
 - **Part A(a):** a static website hosted from S3 and served publicly, with my L-number and name as the header.
 - **Part A(b):** a three-tier architecture (web, application, database tiers).
-- **Part B:** best practices, tooling and the "ilities" (security, scalability, performance).
+- **Part A, Q2 ("next level"):** a second round of enhancing the three-tier architecture.
+  I made the RDS database Multi-AZ (after considering Aurora), separated the application
+  code from the instance deployment, extended monitoring with CloudWatch alarms and SNS
+  notifications, and added a CI pipeline with cfn-lint and cfn-nag. See [section 8](#8-taking-it-to-the-next-level).
+- **Part B:** best practices, tooling and the "ilities" (security, scalability, performance, cost).
+  See [section 7](#7-part-b-best-practices-and-ilities).
 
-## 2. Repository structure
+## 3. Repository structure
 
 ```
 .
@@ -54,13 +93,13 @@ _TODO: a short summary of what the project delivers._
 └── README.md             # This write-up
 ```
 
-## 3. Prerequisites
+## 4. Prerequisites
 
 - An AWS account with a non-root IAM identity (root user MFA enabled, budget alarm configured)
 - AWS CLI v2 with a named profile
 - [cfn-lint](https://github.com/aws-cloudformation/cfn-lint)
 
-### 3.1 How the projects are deployed (nested stacks)
+### 4.1 How the projects are deployed (nested stacks)
 
 Each project is a **root stack** (`main.yaml`) that composes **modules**. Each module is a
 nested stack (`AWS::CloudFormation::Stack`), the CloudFormation equivalent of a Terraform
@@ -83,9 +122,9 @@ aws s3 mb s3://l00205332-cfn-artifacts-eu-west-1 --profile atu --region eu-west-
 > Commands are shown in bash style. In PowerShell, replace the trailing `\` line
 > continuations with a backtick (`` ` ``), or put each command on one line.
 
-## 4. Part A(a): Static website on S3
+## 5. Part A(a): Static website on S3
 
-### 4.1 Architecture
+### 5.1 Architecture
 
 ```
 Visitor --HTTPS--> CloudFront distribution  (cdn module)
@@ -115,7 +154,7 @@ The header shows `L00205332 – Mohamed Hanafi Sayed Khalifa Ismail`. Both value
 [`static-site/parameters/dev.json`](static-site/parameters/dev.json), so the page content is
 never hard-coded in the templates.
 
-### 4.2 Deployment
+### 5.2 Deployment
 
 Root stack: [`static-site/main.yaml`](static-site/main.yaml), modules in
 [`static-site/modules/`](static-site/modules/)
@@ -151,7 +190,7 @@ aws cloudformation describe-stacks \
 
 The first deployment takes about 5 minutes, mostly while the CloudFront distribution is created.
 
-### 4.3 Testing
+### 5.3 Testing
 
 Deployed on 2026-10-31 to `eu-west-1` from the `main` branch, as stack `l00205332-static-site-dev`.
 
@@ -226,9 +265,9 @@ All four checks passed:
 | c | Custom error page for missing pages | `curl.exe -sSI --ssl-no-revoke https://dd045i4kaiewg.cloudfront.net/nope.html` | `404` | ✅ `404 Not Found` with `Content-Length: 446` (the custom `error.html`, not S3's XML error) and `X-Cache: Error from cloudfront`. S3's `403` for the missing key was mapped to a `404` by the distribution's `CustomErrorResponses`. |
 | d | Bucket not publicly readable | `curl.exe -sSI --ssl-no-revoke https://l00205332-static-site-dev-storagesta-websitebucket-xuuvrhfuxhx4.s3.eu-west-1.amazonaws.com/index.html` | `403` | ✅ `403 Forbidden` from S3. The object exists, but it can only be read through CloudFront (OAC), never directly. |
 
-## 5. Part A(b): Three-tier architecture
+## 6. Part A(b): Three-tier architecture
 
-### 5.1 Architecture
+### 6.1 Architecture
 
 Root stack: [`three-tier/main.yaml`](three-tier/main.yaml), modules in
 [`three-tier/modules/`](three-tier/modules/)
@@ -362,7 +401,7 @@ three-tier/app/  --aws s3 cp-->  s3://<artifacts-bucket>/three-tier/app/<AppVers
 
 _TODO: my explanation of the design decisions._
 
-### 5.2 Deployment
+### 6.2 Deployment
 
 ```bash
 cfn-lint
@@ -417,7 +456,7 @@ The first deployment takes about 20 minutes (Multi-AZ RDS is the slowest resourc
 cost is about $3-4 per day (ALB, 2 x t4g.micro, Multi-AZ db.t4g.micro, Secrets Manager
 endpoint), so delete the stack after testing.
 
-### 5.3 Testing
+### 6.3 Testing
 
 Deployed on 2026-10-31 to `eu-west-1` from the `main` branch, as stack `l00205332-three-tier-dev`.
 
@@ -502,7 +541,7 @@ password. It never appears in the template, the parameters or the console.
 
 ![RDS console: PostgreSQL instance available, no internet access, credentials in Secrets Manager](docs/images/three-tier/06-rds-instance.png)
 
-### 5.4 Testing the next-level improvements
+### 6.4 Testing the next-level improvements
 
 Redeployed on 2026-10-31 from `main` after PR #13 (app releases, Multi-AZ RDS, monitoring).
 The stack reached `CREATE_COMPLETE`. A second `deploy` with only `AlertEmail` changed updated
@@ -576,22 +615,77 @@ Multi-AZ DB Instance", 15:59 to 16:06) and the forced failover at 19:33 to 19:34
 
 ![RDS: database alarms OK and the failover event history](docs/images/next-level/06-rds-alarms-and-failover-events.png)
 
-## 6. Part B: Best practices and "ilities"
+## 7. Part B: Best practices and "ilities"
 
-### 6.1 Security
-_TODO_
+### 7.1 Security
 
-### 6.2 Scalability
-_TODO_
+**Already in place:**
 
-### 6.3 Performance
-_TODO_
+- **Encryption at rest:** EC2 volumes (`Encrypted: true` in the launch template), RDS storage,
+  S3 buckets (SSE-S3) and Secrets Manager.
+- **Encryption in transit:** the app connects to the database over TLS (`sslmode=require`).
+  The static site is HTTPS-only through CloudFront, and the S3 bucket policies deny any
+  non-TLS request.
+- **Network isolation:** the app and database tiers run in private subnets with no internet
+  route. Security groups only allow traffic from the tier in front (Internet → ALB → app →
+  DB). The S3 website bucket is private and readable only through CloudFront OAC.
+- **Secrets and identity:**
+  - The database password is generated by RDS and kept in Secrets Manager.
+  - IAM roles are least-privilege.
+  - Instances require IMDSv2.
+  - The root user has MFA, and day-to-day work uses a separate admin user.
 
-### 6.4 Cost
-_TODO_
+**What I would still need to do:**
 
-### 6.5 Code quality and tooling
-_TODO: linting, comments, parameterisation, CI._
+- Install an SSL/TLS certificate (ACM, with a registered domain) on the load balancer, so the
+  public interface of the three-tier application uses HTTPS instead of HTTP.
+- Encrypt the remaining hop between tiers, ALB → app instances, which is HTTP inside the VPC
+  today (for example HTTPS to the targets, or TLS terminated on the instances).
+
+### 7.2 Scalability
+
+**Already in place:** an Auto Scaling group (2 to 4 instances, target-tracking at 50% CPU)
+behind an Application Load Balancer across two Availability Zones, CloudFront for the static
+site, and a Multi-AZ database.
+
+**What I would still need to do:** adopt Aurora for better database scalability (read
+replicas and storage that grows automatically). The Multi-AZ standby protects availability, but
+it cannot serve reads.
+
+### 7.3 Performance
+
+**Already in place:** CloudFront edge caching with compression and HTTP/2 and HTTP/3 for the
+static site, Graviton (arm64) instances, and a CloudWatch alarm on slow responses.
+
+**What I would still need to do:** benchmark the resources against the CloudWatch metrics I now
+collect (response time, CPU, database connections and memory), to see whether larger instance
+sizes or more instances would actually help.
+
+### 7.4 Cost
+
+**Already in place:**
+
+- No NAT Gateway: VPC endpoints are used instead.
+- Free-tier-sized instances and the cheapest CloudFront price class.
+- Log and old-version expiry, and 14-day log retention.
+- A budget alarm on the account.
+- Every stack is destroyed after each test session.
+
+**What I would still need to do:** after going to production, review the cost recommendations
+more regularly with AWS Trusted Advisor, AWS Compute Optimizer (instance right-sizing) and Cost
+Explorer.
+
+### 7.5 Code quality and tooling
+
+I am mainly infrastructure-focused, and code tooling is an area I want to learn more about. In
+this project the code quality is enforced by:
+
+- `cfn-lint` on every template (locally and in CI).
+- `cfn-nag` security scanning, with every intentional exception suppressed in the template
+  with a written reason.
+- `ruff` lint and formatting checks on the application code.
+- Commented, parameterised templates (no hard-coded names or environment values), split into
+  reusable nested-stack modules.
 
 #### Continuous integration
 
@@ -630,17 +724,237 @@ The remaining cfn-nag warnings are known and accepted for this lab:
 | W60 | VPC | No flow logs | **Resolved**: VPC Flow Logs to CloudWatch Logs (monitoring improvement) |
 | W47 | SNS topic | No KMS encryption | Suppressed with a reason: CloudWatch alarms cannot publish to a topic encrypted with the AWS-managed key |
 
-## 7. Taking it to the next level
+## 8. Taking it to the next level
 
-_TODO: how I extended or improved on the tutorial and LLM baseline (assignment Part A, Q2)._
+The LLM produced the baseline: one template for the static site and one for the three-tier
+architecture. On top of that baseline, I extended and changed the design as follows:
 
-## 8. Workflow: branches and pull requests
+| Improvement | What changed | PR | Details |
+|-------------|--------------|----|---------|
+| Modular structure | Split each single template into a root stack plus reusable nested-stack modules and per-environment parameter files. I added a separate `loadbalancer` module for the web tier. | #7 | [4.1](#41-how-the-projects-are-deployed-nested-stacks) |
+| CI pipeline | GitHub Actions running cfn-lint, ruff and cfn-nag on every pull request. It caught a real issue (F24), which was fixed in #11. | #10 to #12 | [7.5](#75-code-quality-and-tooling) |
+| App separated from instance deployment | The Python app now lives in `three-tier/app/` and is delivered as a versioned S3 release, with rolling instance updates. | #13 | [6.1](#application-releases) |
+| Multi-AZ RDS | Synchronous standby with automatic failover, chosen over Aurora for cost. Verified with a forced failover: 38 s, and the app recovered by itself. | #13 | [6.4](#64-testing-the-next-level-improvements) |
+| Monitoring and logs | 9 CloudWatch alarms plus RDS events sent to SNS email, ALB access logs and VPC Flow Logs. | #13 | [6.1](#monitoring-alerting-and-logging) |
+| Clean-up fix | A log group survived stack deletion; fixed with least-privilege logging. | #15 | [10.2](#102-finding-from-clean-up-testing-a-log-group-that-survived-stack-deletion) |
 
-_TODO: describe the branching strategy and list the PRs._
+## 9. Workflow: branches and pull requests
 
-## 9. Declared tutorials and LLM usage
+**Branching strategy**
 
-All tutorials and LLM prompts used are declared in [PROMPTS.md](PROMPTS.md).
+- `main` holds only reviewed, merged code, and every deployment to AWS runs from `main`.
+- All work happens on a short-lived branch, merged through a pull request. Branch names say
+  what kind of change it is: `chore/`, `feature/`, `refactor/`, `docs/`, `ci/`, `fix/`.
+- Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), for
+  example `feat(db): ...`, `fix: ...`, `docs: ...`.
+- One logical change per commit. Related features may share a branch (PR #13 has four
+  commits), so they can be tested together in a single paid AWS session.
+- From PR #10 onwards, every pull request is checked by the CI workflow (cfn-lint, ruff and
+  cfn-nag).
+- Deployment evidence is committed on separate `docs/` branches after each AWS test session.
+- I ran every commit, push and merge myself.
+
+**Pull requests**
+
+| PR | Branch | Purpose |
+|----|--------|---------|
+| #1, #2 | `L00205332-patch-1`, `L00205332-patch-2` | Repository set-up: Code of Conduct (edited in the GitHub web editor, which creates `patch-N` branches) |
+| #3 | `chore/project-setup` | Project scaffolding: `.gitignore`, `.gitattributes`, cfn-lint config, README skeleton, `PROMPTS.md` |
+| #4 | `chore/project-setup` | Prompt-log update pushed after #3 was merged |
+| #5 | `feature/static-site` | Part A(a): S3 + CloudFront static website (single template) |
+| #6 | `feature/three-tier` | Part A(b): VPC, ALB, Auto Scaling and RDS (single template) |
+| #7 | `refactor/modular-nested-stacks` | Split into two projects with nested-stack modules and parameter files |
+| #8 | `docs/static-site-evidence` | Static site deployment evidence and test results |
+| #9 | `docs/three-tier-evidence` | Three-tier deployment evidence and test results |
+| #10 | `feature/ci-validation` | CI workflow: cfn-lint + cfn-nag (merged while cfn-nag was failing; see 7.5) |
+| #11 | `feature/ci-validation` | Fix for cfn-nag F24 (RDS username `NoEcho`), which turned `main` green |
+| #12 | `ci/cfn-nag-advisory` | cfn-nag made advisory (report-only) |
+| #13 | `feature/next-level` | Next level: app releases from S3, Multi-AZ RDS, monitoring and logs (4 commits) |
+| #14 | `docs/next-level-evidence` | Next-level deployment evidence (failover test, logs, alarms) |
+| #15 | `fix/lambda-log-groups` | Fix for the Lambda log group that survived stack deletion |
+
+**Git commands used, per PR**
+
+All commands were run in PowerShell from the `workrepo` folder. `gh` is the GitHub CLI.
+
+<details>
+<summary>PR #3: project set-up (first clone)</summary>
+
+```powershell
+git clone https://github.com/L00205332/workrepo.git
+cd workrepo
+git switch -c chore/project-setup
+git add .
+git commit -m "chore: add project scaffolding, lint config and prompt log"
+git push -u origin chore/project-setup
+# PR opened from the link printed by git push, then merged on GitHub
+```
+
+</details>
+
+<details>
+<summary>PR #4: prompt-log update on the same branch</summary>
+
+```powershell
+git add PROMPTS.md
+git commit -m "docs: log P9-P10 in PROMPTS.md"
+git push
+gh pr create --base main --head chore/project-setup --title "docs: log P9-P10 in PROMPTS.md"
+# merged on GitHub
+git switch main
+git pull
+```
+
+</details>
+
+<details>
+<summary>PR #5 and PR #6: Part A(a) and Part A(b) templates</summary>
+
+```powershell
+git switch -c feature/static-site
+git add templates/static-site.yaml README.md PROMPTS.md
+git commit -m "feat: static website on S3 + CloudFront (Part A(a))"
+git push -u origin feature/static-site
+# PR #5 merged on GitHub
+git switch main
+git pull
+
+git switch -c feature/three-tier
+git add templates/three-tier.yaml
+git commit -m "feat: three-tier VPC, ALB, ASG and RDS (Part A(b))"
+git push -u origin feature/three-tier
+# PR #6 merged on GitHub
+git switch main
+git pull
+```
+
+</details>
+
+<details>
+<summary>PR #7: modular refactor (nested stacks)</summary>
+
+```powershell
+git switch -c refactor/modular-nested-stacks
+git add -A          # stages the new folders and the deletion of templates/
+git status
+git commit -m "refactor: split into static-site and three-tier projects with nested-stack modules"
+git push -u origin refactor/modular-nested-stacks
+# merged on GitHub
+```
+
+</details>
+
+<details>
+<summary>PR #8 and PR #9: deployment evidence</summary>
+
+```powershell
+git switch -c docs/static-site-evidence origin/main
+git add -A
+git commit -m "docs: add static site deployment evidence and test results"
+git push -u origin docs/static-site-evidence
+# PR #8 merged on GitHub
+git switch main
+git pull
+
+git switch -c docs/three-tier-evidence
+git add -A
+git commit -m "docs: add three-tier deployment evidence and test results"
+git push -u origin docs/three-tier-evidence
+# PR #9 merged on GitHub
+git switch main
+git pull
+```
+
+</details>
+
+<details>
+<summary>PR #10, PR #11 and PR #12: CI pipeline</summary>
+
+```powershell
+git switch -c feature/ci-validation
+git add -A
+git commit -m "ci: add cfn-lint and cfn-nag validation workflow"
+git push -u origin feature/ci-validation
+gh pr create --base main --title "ci: CloudFormation validation (cfn-lint + cfn-nag)" --body "..."
+# PR #10 merged (cfn-nag failed with F24)
+
+git add three-tier/modules/database.yaml
+git commit -m "fix(db): mask master username with NoEcho (cfn-nag F24)"
+git push
+gh pr create --base main --head feature/ci-validation --title "fix(db): mask master username with NoEcho (cfn-nag F24)" --body "..."
+# PR #11 merged after both checks passed
+git switch main
+git pull
+
+git switch -c ci/cfn-nag-advisory
+git add .github/workflows/cfn-validate.yml
+git commit -m "ci: make cfn-nag report-only (advisory)"
+git push -u origin ci/cfn-nag-advisory
+gh pr create --base main --title "ci: make cfn-nag advisory" --body "..."
+# PR #12 merged after the checks passed
+git switch main
+git pull
+```
+
+</details>
+
+<details>
+<summary>PR #13: next-level improvements (one branch, one commit per feature)</summary>
+
+```powershell
+git switch -c feature/next-level
+
+git add -A
+git commit -m "refactor(app): move application out of user data into three-tier/app with versioned S3 releases"
+git add -A
+git commit -m "docs: document application releases, CI jobs and cfn-nag policy"
+git add -A
+git commit -m "feat(db): enable Multi-AZ RDS by default with maintenance windows"
+git add -A
+git commit -m "feat(monitoring): add CloudWatch alarms, SNS alerts, RDS events, ALB access logs and VPC flow logs"
+
+git push -u origin feature/next-level
+gh pr create --base main --title "feat: next-level improvements (app releases, Multi-AZ RDS, monitoring)" --body "..."
+# merged on GitHub after all three CI checks passed
+git switch main
+git pull
+```
+
+</details>
+
+<details>
+<summary>PR #14: next-level evidence</summary>
+
+```powershell
+git switch -c docs/next-level-evidence
+git add -A
+git commit -m "docs: add next-level deployment evidence (app releases, Multi-AZ failover, monitoring)"
+git push -u origin docs/next-level-evidence
+gh pr create --base main --title "docs: next-level deployment evidence" --body "..."
+# merged on GitHub
+```
+
+</details>
+
+<details>
+<summary>PR #15: Lambda log-group fix</summary>
+
+```powershell
+git fetch
+git switch -c fix/lambda-log-groups origin/main
+git add -A
+git commit -m "fix: pin custom-resource Lambdas to managed log groups and drop logs:CreateLogGroup"
+git push -u origin fix/lambda-log-groups
+gh pr create --base main --title "fix: Lambda log groups surviving stack deletion" --body "..."
+# merged on GitHub after the checks passed
+```
+
+</details>
+
+**Lesson learned:** PR #10 was merged while its cfn-nag check was red, which broke `main` until
+PR #11 fixed it. A follow-up push to an already-merged branch also does not trigger CI until a
+new PR is opened. Requiring status checks in a branch protection rule on `main` would prevent
+both problems.
 
 ## 10. Clean-up
 
@@ -727,4 +1041,14 @@ include the log groups.
 
 ## 11. References
 
-_TODO_
+- **LLM:** Claude Code (Claude Opus 5.5). Every prompt is declared in [PROMPTS.md](PROMPTS.md).
+  I did not use any third-party templates or tutorials.
+- **Documentation referenced:**
+  - AWS Lambda Developer Guide, *Infrastructure as code (IaC)* (quoted in the assignment brief):
+    https://docs.aws.amazon.com/lambda/latest/dg/foundation-iac.html
+  - Elastic Load Balancing, *Enable access logs for your Application Load Balancer* (log-delivery
+    account per Region): https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html
+  - cfn-lint: https://github.com/aws-cloudformation/cfn-lint
+  - cfn-nag: https://github.com/stelligent/cfn_nag
+  - ruff: https://docs.astral.sh/ruff/
+  - Conventional Commits: https://www.conventionalcommits.org/

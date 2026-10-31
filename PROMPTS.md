@@ -46,7 +46,7 @@ must be authored by me, and proposed a repo layout and branch plan.
 (git, GitHub CLI, AWS CLI, cfn-lint), and listed the account and credential setup steps for me
 to do myself.
 
-**My action:** _(fill in)_
+**My action:** Installed the GitHub CLI and cfn-lint myself, logged in with `gh auth login`, and adopted this file as the running record of every prompt for the submission.
 
 ---
 
@@ -59,7 +59,7 @@ to do myself.
 ATU email: securing the root user, setting a cost budget alarm, creating an admin user in IAM
 Identity Center, and logging in from the CLI with an SSO profile instead of long-lived access keys.
 
-**My action:** _(fill in)_
+**My action:** Decided to open a personal AWS account with my ATU email, and followed the hardening steps myself (root MFA, a separate admin identity, CLI profile).
 
 ---
 
@@ -73,7 +73,7 @@ Identity Center, and logging in from the CLI with an SSO profile instead of long
 steps were done and which were still open (budget alarm, CLI SSO profile), and asked whether the
 admin user was made in IAM Identity Center or as a classic IAM user.
 
-**My action:** _(fill in)_
+**My action:** Created account `atu-L00205332` (USD 100 credits), enabled MFA on the root user, created the admin user `L00205332-admin` with MFA, and configured the AWS CLI profile `atu`.
 
 ---
 
@@ -86,7 +86,7 @@ admin user was made in IAM Identity Center or as a classic IAM user.
 auth, cfn-lint, AWS profile and caller identity, CloudFormation access) and ran them to report
 the results.
 
-**My action:** _(fill in)_
+**My action:** Ran all the validation commands myself. Everything passed except `cfn-lint`, which was installed but not on PATH. I fixed that by adding the Python Scripts folder to my user PATH.
 
 ---
 
@@ -101,7 +101,7 @@ files, commit authorship, merged PRs, collaborators. Confirmed all commits are a
 that the lecturer appears as a collaborator, then proposed how to clone it locally and lay out the
 assignment (keeping the brief PDF out of the public repo).
 
-**My action:** _(fill in)_
+**My action:** Created the GitHub repository with a LICENSE and a Code of Conduct (PRs #1 and #2) and added my lecturer (`ruthlennonatu`) as a collaborator.
 
 ---
 
@@ -117,7 +117,7 @@ files for my review: `.gitignore` (blocks credentials and local artefacts), `.gi
 write-up. Gave me the git commands to update the remote URL after the rename and to commit on a
 `chore/project-setup` branch with a PR.
 
-**My action:** _(fill in)_
+**My action:** Cloned the repository, reviewed the generated set-up files, then created the `chore/project-setup` branch, committed, pushed and merged PRs #3 and #4 myself.
 
 ---
 
@@ -153,7 +153,7 @@ Linted clean with cfn-lint (after adding explicit `DeletionPolicy`/`UpdateReplac
 rule I3011) and passed `aws cloudformation validate-template`. Also added deploy and clean-up
 commands to the README.
 
-**My action:** _(fill in: what I reviewed, changed or extended)_
+**My action:** Reviewed the generated template and questioned whether it covered the three-tier requirement (which led to P10). Committed it on `feature/static-site` and merged PR #5.
 
 ---
 
@@ -199,7 +199,7 @@ cfn-lint flagged PostgreSQL 16 as deprecated (W3691), so the template was change
 current default in eu-west-1. Passed cfn-lint and `validate-template`; the embedded Python was
 syntax-checked. Added the architecture, deploy and clean-up sections to the README.
 
-**My action:** _(fill in: what I reviewed, changed or extended)_
+**My action:** Reviewed the template, committed it on `feature/three-tier` and merged PR #6. I asked to review the code myself before any deployment (P14).
 
 ---
 
@@ -213,7 +213,7 @@ in S3, served by CloudFront, with no server code and no database); A(b) is a dyn
 application split into web, application and database tiers inside a VPC. Covered what each
 demonstrates, its cost and how it scales, and when each style is the right choice.
 
-**My action:** _(fill in)_
+**My action:** Used the comparison to separate the two deliverables clearly in the write-up and to explain when each architecture is the right choice.
 
 ---
 
@@ -226,7 +226,7 @@ demonstrates, its cost and how it scales, and when each style is the right choic
 **LLM response (summary):** Checked the working tree and gave the branch, commit, push and PR
 commands to merge the static-site and three-tier templates as two separate PRs.
 
-**My action:** _(fill in)_
+**My action:** Ran the branch, commit and push commands myself and merged PRs #5 and #6 before any AWS deployment.
 
 ---
 
@@ -297,7 +297,7 @@ every required module parameter is passed, every `Outputs` reference exists, the
 files only use known keys, and the embedded app code is unchanged. The suggestion to move the
 app code out of user data was deferred, as agreed. No commands were run against AWS or git.
 
-**My action:** _(fill in)_
+**My action:** Reviewed the refactored modules, committed the change on `refactor/modular-nested-stacks` (including the removal of `templates/`) and merged PR #7.
 
 ---
 
@@ -312,7 +312,7 @@ outputs, and run four `curl` checks (HTTPS 200 with security headers, HTTP→HTT
 custom 404, direct S3 access denied). Also gave troubleshooting commands for nested-stack
 failures and a reminder to destroy the stack afterwards.
 
-**My action:** _(fill in)_
+**My action:** Created the artifacts bucket, packaged and deployed the static site myself, checked it in the browser and with `curl`, took the screenshots, merged the evidence (PR #8) and destroyed the stack. I also asked why packaging and a separate test branch were needed before continuing.
 
 ---
 
@@ -351,9 +351,9 @@ first so the others are checked automatically. Implemented the first one:
 
 The workflow token is read-only, and stale runs are cancelled. Added a documented cfn-nag
 suppression for RDS deletion protection (F80) in the database module, a CI badge, and a CI
-section in README 6.5. cfn-nag could not be run locally (no Ruby), so its first run is on the PR.
+section in README 7.5. cfn-nag could not be run locally (no Ruby), so its first run is on the PR.
 
-**My action:** _(fill in)_
+**My action:** Chose the four improvements myself. I picked Multi-AZ RDS over Aurora to control cost, kept the alert email out of the public repo with a command-line override, and set CI to fail on errors only. Committed the workflow on `feature/ci-validation` (PR #10).
 
 ---
 
@@ -399,7 +399,7 @@ branch) and made cfn-nag advisory, keeping the F24 fix.
 - Updated the README: structure, an "Application releases" section, and the upload step in the
   deployment instructions.
 
-**My action:** _(fill in)_
+**My action:** Reviewed the extracted app and the new bootstrap, committed it as the first commit on `feature/next-level`, and uploaded release `1.0.0` to the artifacts bucket myself.
 
 ---
 
@@ -422,7 +422,7 @@ branch) and made cfn-nag advisory, keeping the F24 fix.
   estimates.
 - cfn-lint passes.
 
-**My action:** _(fill in)_
+**My action:** Reviewed and committed the Multi-AZ change as the second feature commit on `feature/next-level`.
 
 ---
 
@@ -456,7 +456,7 @@ branch) and made cfn-nag advisory, keeping the F24 fix.
   PowerShell, checked locally), the cfn-nag table and the clean-up notes.
 - cfn-lint passes. All module parameters and outputs were cross-checked.
 
-**My action:** _(fill in)_
+**My action:** Asked for ALB access logs and VPC flow logs to be included as well. I committed the change, merged PR #13 after all three CI checks passed, and deployed from `main`. I then ran the forced Multi-AZ failover test, captured the evidence (PR #14), destroyed the stack and deleted the RDS snapshot.
 
 ---
 
@@ -482,7 +482,7 @@ log-bucket emptier):
 Added README section 10.2 (the finding and the fix) and log-group checks in 10.1. cfn-lint
 passes.
 
-**My action:** _(fill in)_
+**My action:** Asked why the fix was needed before agreeing to it. I deleted the leftover log group, re-tested with a static-site deploy and delete to confirm nothing was left behind, and merged PR #15.
 
 ---
 
