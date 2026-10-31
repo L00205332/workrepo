@@ -290,7 +290,89 @@ about $2-3 per day (ALB, 2 x t4g.micro, db.t4g.micro, Secrets Manager endpoint),
 the stack after testing.
 
 ### 5.3 Testing
-_TODO_
+
+Deployed on 2026-10-31 to `eu-west-1` from the `main` branch, as stack `l00205332-three-tier-dev`.
+
+#### Package, deploy and outputs
+
+`cfn-lint` passed. `package` uploaded the four modules (networking, database, loadbalancer,
+compute) to the existing artifacts bucket. A second `package` run uploaded nothing, because the
+module files are named by a hash of their content and were already in S3. `deploy` created the
+root stack and its four nested stacks with the values in `parameters/dev.json`.
+
+![Terminal: package, deploy and stack outputs for the three-tier stack](docs/images/three-tier/01-package-deploy-outputs.png)
+
+| Output | Value | Tier |
+|--------|-------|------|
+| ApplicationURL | `http://l00205-Appli-vtBvCFIMy9hw-898272983.eu-west-1.elb.amazonaws.com` | Web: the public entry point |
+| VpcId | `vpc-0e702005271efa4f5` | Network |
+| DatabaseEndpoint | `l00205332-three-tier-dev-databasestack-dbinstance-ijimsrbwi9jo.cfcai48weumv.eu-west-1.rds.amazonaws.com` | Database: private, not internet-routable |
+| DatabaseSecretArn | Secrets Manager secret created and managed by RDS | Database credentials, never in the template |
+
+> These resources are destroyed after testing (see [section 10](#10-clean-up)), so the URL no
+> longer works.
+
+#### Functional checks
+
+All five checks passed.
+
+| # | Check | Command / action | Expected | Result |
+|---|-------|------------------|----------|--------|
+| 1 | Web tier reaches the app tier | Open the ApplicationURL in a browser | Page with L-number, name, instance ID and AZ | ✅ Page served by `i-03d9482278b6a4dc0` in `eu-west-1b`, header `L00205332 – Mohamed Hanafi Sayed Khalifa Ismail` |
+| 2 | Load balancing across AZs | Repeated requests | Instance and AZ alternate | ✅ Consecutive requests answered by `i-03d9482278b6a4dc0` (`eu-west-1b`) and `i-08eea7619f5b7a1a7` (`eu-west-1a`) |
+| 3 | App tier reaches the DB tier | `curl.exe -s <ApplicationURL>/api/visits` (repeated) | `visits` count increases | ✅ `1` (browser), then `2`, then `3`. Every instance writes to and reads from the same PostgreSQL database. |
+| 4 | Health check endpoint | `curl.exe -s <ApplicationURL>/api/health` | `{"status": "ok", ...}` | ✅ `{"status": "ok", "instance": "i-03d9482278b6a4dc0"}` |
+| 5 | Database is private | `nslookup <DatabaseEndpoint>` | Private IP | ✅ Resolves to `10.0.5.73`, in the isolated DB subnet `db-b` (`10.0.5.0/24`). The name is public DNS, but the address cannot be routed from the internet. |
+
+API responses:
+
+```text
+GET /api/visits  ->  {"visits": 2, "served_by": "i-03d9482278b6a4dc0", "availability_zone": "eu-west-1b"}
+GET /api/visits  ->  {"visits": 3, "served_by": "i-08eea7619f5b7a1a7", "availability_zone": "eu-west-1a"}
+GET /api/health  ->  {"status": "ok", "instance": "i-03d9482278b6a4dc0"}
+nslookup <DatabaseEndpoint>  ->  Address: 10.0.5.73
+```
+
+#### The live application
+
+The page is produced by the application tier, which runs on EC2 in a private subnet and is
+reached only through the load balancer. The visit count comes from the database tier. It shows
+`1` here because this was the first request ever recorded in the `visits` table.
+
+![Three-tier application page served through the ALB](docs/images/three-tier/02-website.png)
+
+#### Application tier: EC2 instances
+
+The Auto Scaling group launched two `t4g.micro` (Graviton/arm64) instances, one in each
+Availability Zone (`eu-west-1a` and `eu-west-1b`). Both pass 3/3 status checks. Neither has a
+public IPv4 address, public DNS name or Elastic IP: they sit in private subnets with no internet
+route.
+
+![EC2 console: two app instances, one per AZ, no public IPs](docs/images/three-tier/03-ec2-instances.png)
+
+#### Web tier: Application Load Balancer
+
+The ALB is `Active`, `internet-facing`, and spans 2 Availability Zones in the project VPC
+(`vpc-0e702005271efa4f5`). It is the only resource with a public entry point.
+
+![EC2 console: internet-facing ALB across two AZs](docs/images/three-tier/04-load-balancer.png)
+
+#### Application tier: Auto Scaling group
+
+The group is `At desired capacity` with 2 instances (min 2, max 4), and both are healthy against
+the ALB health check (`/api/health`). The instances are created from the launch template
+defined in the compute module.
+
+![Auto Scaling group: desired 2, min 2, max 4, 2/2 healthy](docs/images/three-tier/05-auto-scaling-group.png)
+
+#### Database tier: RDS PostgreSQL
+
+The `db.t4g.micro` PostgreSQL instance is `Available`. **Internet access gateway: Disabled**
+confirms it is not publicly accessible. The master credentials are held in AWS Secrets Manager
+(**Master credentials ARN**), because `ManageMasterUserPassword: true` means RDS generated the
+password. It never appears in the template, the parameters or the console.
+
+![RDS console: PostgreSQL instance available, no internet access, credentials in Secrets Manager](docs/images/three-tier/06-rds-instance.png)
 
 ## 6. Part B: Best practices and "ilities"
 
