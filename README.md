@@ -681,10 +681,49 @@ aws ec2 describe-instances --profile atu --region eu-west-1 \
 aws rds describe-db-instances --profile atu --region eu-west-1 --query "DBInstances[].DBInstanceIdentifier" --output text
 aws elbv2 describe-load-balancers --profile atu --region eu-west-1 --query "LoadBalancers[].LoadBalancerName" --output text
 aws rds describe-db-snapshots --profile atu --region eu-west-1 --snapshot-type manual --query "DBSnapshots[].DBSnapshotIdentifier" --output text
+
+# No log groups left behind by the project's Lambda functions or VPC flow logs
+aws logs describe-log-groups --profile atu --region eu-west-1 --log-group-name-prefix /aws/lambda/l00205332 --query "logGroups[].logGroupName" --output text
+aws logs describe-log-groups --profile atu --region eu-west-1 --log-group-name-prefix /vpc/L00205332 --query "logGroups[].logGroupName" --output text
 ```
 
 If a stack ends in `DELETE_FAILED`, open its **Events** tab in the CloudFormation console, fix the
 blocking resource (for example, empty a bucket by hand), then delete the stack again.
+
+### 10.2 Finding from clean-up testing: a log group that survived stack deletion
+
+After the next-level test session, every resource was gone except one: a CloudWatch log group
+for the static site's content-deployer Lambda, re-created with **no retention limit**.
+
+**Cause: a race on deletion.** On `delete-stack`, the custom resource invokes the Lambda one
+last time, and CloudFormation then deletes the log group. The function's final log lines arrive
+a moment later. The functions used the AWS managed policy `AWSLambdaBasicExecutionRole`, which
+grants `logs:CreateLogGroup` on `*`, so Lambda silently re-created the group outside
+CloudFormation's control. The three-tier bucket-emptier Lambda had the same weakness.
+
+**Fix:** both custom-resource functions (`static-site/modules/content.yaml` and
+`three-tier/modules/loadbalancer.yaml`) were changed in three ways:
+
+1. They log to an **explicitly named, template-managed log group** through
+   `LoggingConfig.LogGroup`. The name is based on the stack name, not the function name, so the
+   role can reference it without a circular dependency.
+2. `AWSLambdaBasicExecutionRole` was replaced with an **inline policy** that allows only
+   `logs:CreateLogStream` and `logs:PutLogEvents` on that one log group.
+3. Without `logs:CreateLogGroup`, a late log write fails harmlessly instead of re-creating the
+   group.
+
+This is also a least-privilege improvement: each function can now write only to its own log
+group, instead of creating and writing to any log group in the account. The 10.1 checks now
+include the log groups.
+
+**Verification (2026-10-31):**
+
+1. Deleted the leftover log group by hand.
+2. Deployed the fixed static site and deleted it again. The nested stacks were removed in
+   dependency order: content 20:19:04, cdn 20:19:38, storage 20:22:40.
+3. Ran the log-group check (`describe-log-groups --log-group-name-prefix /aws/lambda/l00205332`)
+   straight after the delete, and again a few minutes later. It returned **nothing** both
+   times: no log group re-appeared.
 
 ## 11. References
 

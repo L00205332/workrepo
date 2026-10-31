@@ -460,6 +460,32 @@ branch) and made cfn-nag advisory, keeping the F24 fix.
 
 ---
 
+### P24 (2026-10-31): Fix the Lambda log group that survived stack deletion
+
+**Prompts:**
+> Why we need fix/lambda-log-groups ?
+
+> go ahead with the fix
+
+**LLM response (summary):** The post-deletion checks found one leftover resource, a Lambda log
+group re-created without retention. The cause was a race: the Lambda's final logs arrived after
+CloudFormation had deleted the log group, and `AWSLambdaBasicExecutionRole` allowed
+`logs:CreateLogGroup`. The LLM explained why the fix was worth doing (full lifecycle ownership,
+no unbounded log retention, least privilege, material for the write-up) and the alternative of
+documenting it as a limitation.
+
+The fix changed both custom-resource Lambdas (static-site content deployer and three-tier
+log-bucket emptier):
+- each logs to an explicitly named, template-managed log group (`LoggingConfig`);
+- the managed policy was replaced with `CreateLogStream`/`PutLogEvents` on that log group only.
+
+Added README section 10.2 (the finding and the fix) and log-group checks in 10.1. cfn-lint
+passes.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title
