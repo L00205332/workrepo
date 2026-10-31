@@ -25,6 +25,9 @@ Parameters:
   DBUsername:
     Type: String
     Description: Master username (the password is managed by RDS).
+    # NoEcho masks the value in the console, API output and events, so the
+    # username is not exposed alongside the endpoint (cfn-nag F24).
+    NoEcho: true
   DBAllocatedStorage:
     Type: Number
     Description: Database storage in GiB.
