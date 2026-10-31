@@ -1,11 +1,12 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Part A(b) - Three-tier architecture for L00205332 (root stack).
-  Composes four nested-stack modules:
-    networking    - VPC, subnets, route tables, security groups, VPC endpoints
-    loadbalancer  - web tier: internet-facing Application Load Balancer
+  Composes five nested-stack modules:
+    networking    - VPC, subnets, route tables, security groups, VPC endpoints, flow logs
+    loadbalancer  - web tier: internet-facing Application Load Balancer + access logs
     compute       - application tier: EC2 Auto Scaling group (Python UI + API)
-    database      - database tier: RDS for PostgreSQL
+    database      - database tier: RDS for PostgreSQL (Multi-AZ)
+    monitoring    - CloudWatch alarms and RDS events -> SNS email notifications
   Package before deploying so the module paths are uploaded to S3:
     aws cloudformation package --template-file three-tier/main.yaml ...
 
@@ -21,6 +22,8 @@ Metadata:
         Parameters: [InstanceType, MinSize, MaxSize, DesiredCapacity, ArtifactsBucketName, AppVersion]
       - Label: { default: Database tier }
         Parameters: [DBInstanceClass, DBName, DBUsername, DBAllocatedStorage, DBMultiAZ]
+      - Label: { default: Monitoring }
+        Parameters: [AlertEmail]
 
 # ---------------------------------------------------------------------------
 # Parameters: set per environment in parameters/<env>.json
@@ -138,11 +141,20 @@ Parameters:
     Default: "true"
     AllowedValues: ["true", "false"]
 
+  AlertEmail:
+    Type: String
+    Description: >-
+      Email address for alarm notifications. Deliberately not in parameters/*.json
+      (public repository): pass it on the command line at deploy time.
+    NoEcho: true
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    ConstraintDescription: Must be a valid email address.
+
 Resources:
   # Each TemplateURL is a local path; `aws cloudformation package` uploads the
   # module to S3 and rewrites the path to the S3 URL. Outputs of one module are
   # passed as parameters to the next, which also sets the creation order:
-  #   networking -> database + loadbalancer (in parallel) -> compute
+  #   networking -> database + loadbalancer (in parallel) -> compute -> monitoring
   NetworkingStack:
     Type: AWS::CloudFormation::Stack
     # Deleting the root stack deletes this module and everything in it.
@@ -213,6 +225,24 @@ Resources:
         ArtifactsBucketName: !Ref ArtifactsBucketName
         AppVersion: !Ref AppVersion
 
+  # Created last: it needs names/IDs from the load balancer, compute and
+  # database modules to attach the alarms.
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/monitoring.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+        AlertEmail: !Ref AlertEmail
+        LoadBalancerFullName: !GetAtt LoadBalancerStack.Outputs.LoadBalancerFullName
+        TargetGroupFullName: !GetAtt LoadBalancerStack.Outputs.TargetGroupFullName
+        AutoScalingGroupName: !GetAtt ComputeStack.Outputs.AutoScalingGroupName
+        DBInstanceId: !GetAtt DatabaseStack.Outputs.DBInstanceId
+
 Outputs:
   ApplicationURL:
     Description: Public URL of the three-tier application (web tier entry point).
@@ -229,3 +259,9 @@ Outputs:
   DatabaseInstanceId:
     Description: RDS instance identifier (for failover tests and monitoring).
     Value: !GetAtt DatabaseStack.Outputs.DBInstanceId
+  AlertsTopicArn:
+    Description: SNS topic that receives alarm and RDS event notifications.
+    Value: !GetAtt MonitoringStack.Outputs.AlertsTopicArn
+  AccessLogsBucketName:
+    Description: S3 bucket with the ALB access logs.
+    Value: !GetAtt LoadBalancerStack.Outputs.AccessLogsBucketName

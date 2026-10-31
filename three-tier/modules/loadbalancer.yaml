@@ -2,6 +2,8 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Three-tier / loadbalancer module (web tier) - internet-facing Application
   Load Balancer in the public subnets, forwarding to the application tier.
+  Access logs are written to a private, encrypted S3 bucket that is emptied
+  automatically when the stack is deleted.
 
 Parameters:
   StudentId:
@@ -20,9 +22,166 @@ Parameters:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Load balancer security group (from the networking module).
 
+# Elastic Load Balancing writes access logs from an AWS-owned account that is
+# different in each Region (Regions launched before August 2022).
+# https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html
+Mappings:
+  ElbLogDeliveryAccount:
+    eu-west-1:
+      AccountId: "156460612806"
+    eu-west-2:
+      AccountId: "652711504416"
+    eu-central-1:
+      AccountId: "054676820928"
+    us-east-1:
+      AccountId: "127311923021"
+    us-west-2:
+      AccountId: "797873946194"
+
 Resources:
+  # -------------------------------------------------------------------------
+  # Access logs: one record per request (client IP, latency, status codes).
+  # -------------------------------------------------------------------------
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    # Emptied by AccessLogsBucketEmptier on stack deletion, then deleted.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256 # ALB log delivery supports SSE-S3 only
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      # Logs older than 30 days are deleted automatically to bound storage cost.
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAccessLogs
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-alb-access-logs
+
+  AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Least privilege: the regional ELB account may only write log files
+          # for this account under the alb/ prefix.
+          - Sid: AllowElbLogDelivery
+            Effect: Allow
+            Principal:
+              AWS: !Sub
+                - arn:${AWS::Partition}:iam::${ElbAccountId}:root
+                - ElbAccountId: !FindInMap [ElbLogDeliveryAccount, !Ref AWS::Region, AccountId]
+            Action: s3:PutObject
+            Resource: !Sub ${AccessLogsBucket.Arn}/alb/AWSLogs/${AWS::AccountId}/*
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt AccessLogsBucket.Arn
+              - !Sub ${AccessLogsBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # Custom resource that empties the log bucket on stack deletion, so
+  # "delete-stack" removes everything (CloudFormation cannot delete a
+  # non-empty bucket). It does nothing on create or update.
+  AccessLogsBucketEmptierRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Lets the emptier Lambda delete objects in the ALB access log bucket.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: EmptyAccessLogsBucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt AccessLogsBucket.Arn
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub ${AccessLogsBucket.Arn}/*
+
+  AccessLogsBucketEmptierFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Empties the ALB access log bucket when the stack is deleted.
+      Runtime: python3.13
+      Handler: index.handler
+      Role: !GetAtt AccessLogsBucketEmptierRole.Arn
+      Timeout: 300
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          # cfnresponse is provided by AWS for inline (ZipFile) Lambda code.
+          import boto3
+          import cfnresponse
+
+
+          def handler(event, context):
+              bucket = event["ResourceProperties"]["BucketName"]
+              print(f"{event['RequestType']} request for bucket {bucket}")
+              if event["RequestType"] == "Delete":
+                  try:
+                      boto3.resource("s3").Bucket(bucket).objects.all().delete()
+                  except Exception as err:
+                      # Never block a stack delete; a non-empty bucket reports its own error.
+                      print(f"Error emptying bucket: {err}")
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, physicalResourceId=f"{bucket}-emptier")
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-alb-logs-emptier
+
+  AccessLogsBucketEmptierLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AccessLogsBucketEmptierFunction}
+      RetentionInDays: 14
+
+  AccessLogsBucketEmptier:
+    Type: Custom::EmptyBucketOnDelete
+    DependsOn: AccessLogsBucketEmptierLogGroup
+    Properties:
+      ServiceToken: !GetAtt AccessLogsBucketEmptierFunction.Arn
+      BucketName: !Ref AccessLogsBucket
+
+  # -------------------------------------------------------------------------
+  # Web tier: Application Load Balancer, target group and listener.
+  # -------------------------------------------------------------------------
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    # - Bucket policy first: ELB tests write access when logging is enabled.
+    # - Emptier first: on deletion the ALB is removed (no more log writes)
+    #   BEFORE the emptier runs, and the bucket is deleted last.
+    DependsOn:
+      - AccessLogsBucketPolicy
+      - AccessLogsBucketEmptier
     Properties:
       Type: application
       Scheme: internet-facing
@@ -32,10 +191,16 @@ Resources:
         # Reject malformed headers (protects against HTTP request smuggling).
         - Key: routing.http.drop_invalid_header_fields.enabled
           Value: "true"
+        # Access logs to S3 (delivered every 5 minutes).
+        - Key: access_logs.s3.enabled
+          Value: "true"
+        - Key: access_logs.s3.bucket
+          Value: !Ref AccessLogsBucket
+        - Key: access_logs.s3.prefix
+          Value: alb
       Tags:
         - Key: Name
           Value: !Sub ${StudentId}-${EnvironmentName}-alb
-
 
   AppTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -58,9 +223,15 @@ Resources:
         - Key: Name
           Value: !Sub ${StudentId}-${EnvironmentName}-app-tg
 
-
   HttpListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W56
+            reason: >-
+              HTTPS requires an ACM certificate for a registered domain name, which
+              this lab does not have. Documented as a known limitation in the README.
     Properties:
       LoadBalancerArn: !Ref ApplicationLoadBalancer
       Protocol: HTTP
@@ -76,3 +247,12 @@ Outputs:
   LoadBalancerDNSName:
     Description: Public DNS name of the load balancer.
     Value: !GetAtt ApplicationLoadBalancer.DNSName
+  LoadBalancerFullName:
+    Description: Load balancer name in the form used by CloudWatch metric dimensions.
+    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerFullName
+  TargetGroupFullName:
+    Description: Target group name in the form used by CloudWatch metric dimensions.
+    Value: !GetAtt AppTargetGroup.TargetGroupFullName
+  AccessLogsBucketName:
+    Description: S3 bucket that receives the ALB access logs.
+    Value: !Ref AccessLogsBucket

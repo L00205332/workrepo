@@ -426,6 +426,40 @@ branch) and made cfn-nag advisory, keeping the F24 fix.
 
 ---
 
+### P23 (2026-10-31): Monitoring, alerting, access logs and flow logs
+
+**Prompt:**
+> committed, include the access logs and flow logs too
+
+**LLM response (summary):**
+- **New `monitoring` module:** an SNS topic with an email subscription (`AlertEmail` is a
+  `NoEcho` root parameter with email validation, passed on the command line and never stored
+  in the repo), and 9 CloudWatch alarms:
+  - ALB: ELB 5xx, target 5xx, unhealthy hosts, slow responses
+  - Auto Scaling group: CPU high
+  - RDS: CPU, free storage, freeable memory, connections
+
+  Every alarm also sends an OK notification. An RDS event subscription emails failover,
+  failure, availability and low-storage events. Wired in as the fifth nested stack, created
+  last.
+- **Networking module:** VPC Flow Logs (ALL traffic) to a CloudWatch Logs group with 14-day
+  retention. The IAM role is scoped to that log group and has an `aws:SourceAccount` condition.
+- **Loadbalancer module:** ALB access logs to a private, encrypted S3 bucket. Only the
+  regional ELB account may write to the `alb/` prefix, and objects expire after 30 days. A
+  Lambda custom resource empties the bucket on stack deletion, and `DependsOn` ordering
+  removes the ALB before the bucket is emptied. New outputs give the ALB and target group
+  names in CloudWatch dimension format.
+- **cfn-nag:** W52 and W60 are now resolved. W56 (HTTP listener) and W47 (unencrypted SNS
+  topic) are suppressed with written reasons.
+- **README:** structure, module table, creation order, a "Monitoring, alerting and logging"
+  section, deploy commands that add `AlertEmail` to the `dev.json` values (bash and
+  PowerShell, checked locally), the cfn-nag table and the clean-up notes.
+- cfn-lint passes. All module parameters and outputs were cross-checked.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title
