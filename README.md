@@ -1,5 +1,7 @@
 # ATU CloudFormation Assignment: L00205332
 
+[![CloudFormation validation](https://github.com/L00205332/workrepo/actions/workflows/cfn-validate.yml/badge.svg)](https://github.com/L00205332/workrepo/actions/workflows/cfn-validate.yml)
+
 **Module:** IaC for DevOps Pipelines, Atlantic Technological University
 **Student:** Mohamed Hanafi Sayed Khalifa Ismail (L00205332)
 **Lecturer:** Ruth Lennon
@@ -41,6 +43,8 @@ _TODO: a short summary of what the project delivers._
 │   │   ├── compute.yaml        # application tier: EC2 Auto Scaling group + app
 │   │   └── database.yaml       # database tier: RDS PostgreSQL
 │   └── parameters/dev.json
+├── .github/workflows/
+│   └── cfn-validate.yml        # CI: cfn-lint + cfn-nag on every pull request
 ├── .cfnlintrc.yaml             # cfn-lint configuration (lints every template)
 ├── PROMPTS.md            # Declared tutorials and LLM prompts
 └── README.md             # This write-up
@@ -390,6 +394,21 @@ _TODO_
 
 ### 6.5 Code quality and tooling
 _TODO: linting, comments, parameterisation, CI._
+
+#### Continuous integration
+
+[`.github/workflows/cfn-validate.yml`](.github/workflows/cfn-validate.yml) runs on every pull
+request to `main`, on every push to `main`, and on demand:
+
+| Job | Tool | What it checks | Blocks the PR on |
+|-----|------|----------------|------------------|
+| `cfn-lint` | [cfn-lint](https://github.com/aws-cloudformation/cfn-lint) 1.58.0 | Template syntax, resource properties and values for `eu-west-1`, best-practice rules | Errors |
+| `cfn-nag` | [cfn-nag](https://github.com/stelligent/cfn_nag) | Security anti-patterns: open security groups, missing encryption, broad IAM, public resources | Failures |
+
+Warnings are printed in the job log but do not block a merge. When a finding is an intentional
+design decision, it is suppressed in the template with a written reason, so every exception is
+documented next to the code it applies to. For example, RDS deletion protection (`F80`) is off
+because the lab stack must be destroyed after every session.
 
 ## 7. Taking it to the next level
 

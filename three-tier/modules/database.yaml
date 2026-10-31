@@ -53,6 +53,14 @@ Resources:
     # Remember to delete the snapshot after the lab to avoid storage charges.
     DeletionPolicy: Snapshot
     UpdateReplacePolicy: Snapshot
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F80
+            reason: >-
+              Deletion protection is off on purpose: this is a lab stack that must be
+              destroyed after every session to stay within the free-tier budget.
+              Data is still protected by DeletionPolicy Snapshot.
     Properties:
       Engine: postgres
       EngineVersion: "18" # major version only; RDS picks the current default minor

@@ -330,6 +330,33 @@ documentation changes.
 
 ---
 
+### P19 (2026-10-31): "Next level" improvements and CI pipeline
+
+**Prompt:**
+> for next level, i would:
+> GitHub Actions: cfn-lint (+ cfn-nag) on every PR
+> Either using Aurora or atleast make the RDS multi-az
+> Create notifications based on resources metrics
+> Move the Python app out of user data into three-tier/app/
+
+**Follow-up decisions (my answers to the LLM's questions):** Multi-AZ RDS only (not Aurora);
+alert email passed as a command-line override so it never lands in the public repo; CI fails
+on errors only (warnings reported, not blocking).
+
+**LLM response (summary):** Planned the four improvements as separate branches and PRs, CI
+first so the others are checked automatically. Implemented the first one:
+`.github/workflows/cfn-validate.yml`, with two jobs:
+- `cfn-lint` (pinned 1.58.0, fails only on errors)
+- `cfn-nag` (scans each project's `*.yaml` templates, fails only on FAILURES)
+
+The workflow token is read-only, and stale runs are cancelled. Added a documented cfn-nag
+suppression for RDS deletion protection (F80) in the database module, a CI badge, and a CI
+section in README 6.5. cfn-nag could not be run locally (no Ruby), so its first run is on the PR.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title
