@@ -502,6 +502,80 @@ password. It never appears in the template, the parameters or the console.
 
 ![RDS console: PostgreSQL instance available, no internet access, credentials in Secrets Manager](docs/images/three-tier/06-rds-instance.png)
 
+### 5.4 Testing the next-level improvements
+
+Redeployed on 2026-10-31 from `main` after PR #13 (app releases, Multi-AZ RDS, monitoring).
+The stack reached `CREATE_COMPLETE`. A second `deploy` with only `AlertEmail` changed updated
+just the SNS email subscription in the monitoring module, which shows a targeted in-place stack
+update.
+
+#### Summary
+
+| # | Improvement | Check | Result |
+|---|-------------|-------|--------|
+| 1 | App out of user data | `/api/visits` x2 and `/api/health` | ✅ `visits` 1 then 2, served by `i-0a230b67286f75328` (`eu-west-1b`) and `i-002bd620871c2866b` (`eu-west-1a`); health `ok`. Both instances installed release `1.0.0` from S3. |
+| 2 | Multi-AZ RDS | Console: Configuration tab | ✅ `Multi-AZ: Yes`, primary `eu-west-1a`, secondary zone `eu-west-1b` |
+| 2 | Multi-AZ RDS | Forced failover (`reboot-db-instance --force-failover`) | ✅ Failover started 19:33:57, completed 19:34:35 (**38 s**). The app returned `503` only until 19:34:23 and `200` from 19:34:29 onward, with no restart or redeploy. |
+| 2 | Multi-AZ RDS | Endpoint after failover | ✅ The same DNS name now resolves to `10.0.5.84`, in DB subnet `10.0.5.0/24` (`eu-west-1b`): the former standby is now the primary |
+| 3 | Monitoring | CloudWatch alarms | ✅ All 9 alarms created, all in `OK` |
+| 3 | Monitoring | SNS | ✅ Topic `L00205332-dev-alerts` with an email subscription |
+| 3 | Monitoring | RDS events | ✅ Failover events recorded: *failover started*, *instance restarted*, *failover completed* |
+| 3 | VPC Flow Logs | `aws logs describe-log-streams` | ✅ One stream per network interface (`eni-...-all`) |
+| 3 | ALB access logs | `aws s3 ls .../alb/` | ✅ `ELBAccessLogTestFile` (ELB's write test against the bucket policy), then one `.log.gz` file every 5 minutes |
+
+#### Infrastructure: Multi-AZ database, instances and alert topic
+
+![RDS configuration: Multi-AZ Yes, secondary zone eu-west-1b, encrypted gp3 storage](docs/images/next-level/01-rds-multi-az.png)
+
+![EC2: two app instances running, one per AZ, no public IPs](docs/images/next-level/02-ec2-instances.png)
+
+![SNS topic L00205332-dev-alerts](docs/images/next-level/03-sns-topic.png)
+
+#### Application, failover and flow logs (terminal)
+
+The terminal output below shows:
+- both instances serving the app from release `1.0.0`;
+- the AZs before the failover;
+- the failover command;
+- the availability probe (`503 503`, then only `200`s);
+- the flow-log streams.
+
+![Terminal: app checks, forced failover with availability probe, flow-log streams](docs/images/next-level/04-terminal-app-failover-flowlogs.png)
+
+Failover timeline, from the RDS events and the probe:
+
+```text
+19:33:57  Multi-AZ instance failover started
+19:34:13  DB instance restarted
+19:34:17  app /api/visits -> 503   (database unavailable; ALB health checks unaffected)
+19:34:23  app /api/visits -> 503
+19:34:29  app /api/visits -> 200   (recovered: new connection to the promoted standby)
+19:34:35  Multi-AZ instance failover completed
+```
+
+> **Observation:** straight after the failover, `describe-db-instances` still reported
+> `AvailabilityZone: eu-west-1a`. DNS gave the definitive answer: the endpoint resolved to
+> `10.0.5.84`, which is in the `eu-west-1b` DB subnet. The API's AZ field can lag behind the
+> actual failover, so checking the endpoint's IP against the subnet map is a reliable,
+> independent way to verify which AZ is now primary.
+
+#### ALB access logs
+
+`ELBAccessLogTestFile` appears first. It is the file Elastic Load Balancing writes to verify the
+bucket policy when logging is enabled, which confirms that the regional log-delivery account
+mapping is correct. After that, one compressed log file arrives per load balancer node every
+5 minutes.
+
+![S3: ALB access log files under alb/AWSLogs/](docs/images/next-level/05-alb-access-logs.png)
+
+#### Database alarms and RDS events
+
+The RDS console lists the four database alarms (all `OK`) and the event history. The history
+includes the Multi-AZ conversion during creation ("Applying modification to convert to a
+Multi-AZ DB Instance", 15:59 to 16:06) and the forced failover at 19:33 to 19:34.
+
+![RDS: database alarms OK and the failover event history](docs/images/next-level/06-rds-alarms-and-failover-events.png)
+
 ## 6. Part B: Best practices and "ilities"
 
 ### 6.1 Security
