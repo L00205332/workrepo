@@ -90,22 +90,7 @@ the results.
 
 ---
 
-### P6 (2026-10-27): cfn-lint not on PATH
-
-**Prompt:**
-> all valdiation commands have worked perfectly except:
-> `cfn-lint --version` → "The term 'cfn-lint' is not recognized as the name of a cmdlet..."
-> (PowerShell error output pasted)
-
-**LLM response (summary):** Explained that pip installed cfn-lint into the per-user Python
-Scripts folder, which is not on PATH, and gave a PowerShell command that adds that folder to the
-user PATH, plus a fallback that works without changing PATH.
-
-**My action:** _(fill in)_
-
----
-
-### P7 (2026-10-27): GitHub repo review
+### P6 (2026-10-27): GitHub repo review
 
 **Prompt:**
 > i have created my github repo https://github.com/L00205332/workrepo and it has 3 files i believe
@@ -120,7 +105,7 @@ assignment (keeping the brief PDF out of the public repo).
 
 ---
 
-### P8 (2026-10-27): Repo cloned and renamed, project setup files
+### P7 (2026-10-27): Repo cloned and renamed, project setup files
 
 **Prompt:**
 > I have run `git clone https://github.com/L00205332/workrepo.git` (clone output pasted)
@@ -136,23 +121,7 @@ write-up. Gave me the git commands to update the remote URL after the rename and
 
 ---
 
-### P9 (2026-10-27): `gh` not recognised when creating the PR
-
-**Prompt:**
-> `gh pr create --base main --title "chore: project setup" ...` → "The term 'gh' is not recognized
-> as the name of a cmdlet..." (PowerShell error output pasted)
-
-**LLM response (summary):** Checked the repo state: the commit and the push of
-`chore/project-setup` had worked. Found that the repo was still named `workrepo` on GitHub (the
-rename had not been saved) and the remote still pointed there. Explained that the terminal had
-not picked up the new PATH and gave fixes: open a new terminal, or call `gh` by its full path, or
-open the PR in the browser.
-
-**My action:** _(fill in)_
-
----
-
-### P10 (2026-10-27): Keep the repo name
+### P8 (2026-10-27): Keep the repo name
 
 **Prompt:**
 > i won't rename the repo as it's shared with Ruth my instructor.
@@ -164,7 +133,7 @@ URL is already correct, so no changes are needed.
 
 ---
 
-### P11 (2026-10-27): Static website template (Part A(a) baseline)
+### P9 (2026-10-27): Static website template (Part A(a) baseline)
 
 **Prompt:**
 > PR merged, use Mohamed Hanafi Sayed Khalifa Ismail in the header alongside L00205332 for our
@@ -188,7 +157,7 @@ commands to the README.
 
 ---
 
-### P12 (2026-10-27): Where is the three-tier architecture?
+### P10 (2026-10-27): Where is the three-tier architecture?
 
 **Prompt:**
 > where is the three tier architecture here? all i could see is CDN(Frontend), Lambda
@@ -207,9 +176,9 @@ kept the three-tier stack separate from the static site, as the brief describes 
 
 ---
 
-### P13 (2026-10-27): Three-tier template (Part A(b) baseline)
+### P11 (2026-10-27): Three-tier template (Part A(b) baseline)
 
-**Prompt:** _(answers to the design questions in P12)_
+**Prompt:** _(answers to the design questions in P10)_
 > Classic VPC (Recommended); Keep separate (Recommended)
 
 **LLM response (summary):** Generated the baseline `templates/three-tier.yaml`:
@@ -234,7 +203,7 @@ syntax-checked. Added the architecture, deploy and clean-up sections to the READ
 
 ---
 
-### P14 (2026-10-27): Difference between Part A(a) and Part A(b)
+### P12 (2026-10-27): Difference between Part A(a) and Part A(b)
 
 **Prompt:**
 > what's the difference between Part A(a) and Part A(b)?
@@ -248,7 +217,7 @@ demonstrates, its cost and how it scales, and when each style is the right choic
 
 ---
 
-### P15 (2026-10-27): Push and merge before deploying
+### P13 (2026-10-27): Push and merge before deploying
 
 **Prompt:**
 > let me push and merge the code changes for the two designs before we actually try to deploy on
@@ -261,20 +230,7 @@ commands to merge the static-site and three-tier templates as two separate PRs.
 
 ---
 
-### P16 (2026-10-27): Both design PRs merged
-
-**Prompt:** _(terminal output pasted showing branch, commit, push, merge and pull for
-`feature/static-site` and `feature/three-tier`)_
-
-**LLM response (summary):** Confirmed on GitHub that PRs #5 (static site) and #6 (three-tier)
-were merged and that local `main` was in sync. Proposed deploying the static site first, on a new
-branch for deployment and testing evidence.
-
-**My action:** _(fill in)_
-
----
-
-### P17 (2026-10-31): Code review first; always destroy resources
+### P14 (2026-10-31): Code review first; always destroy resources
 
 **Prompt:**
 > let me review the code first before we start deploying the stacks. also add to the project's md
@@ -292,7 +248,7 @@ after every session a project rule.
 
 ---
 
-### P18 (2026-10-31): Restructure into two projects with modules
+### P15 (2026-10-31): Restructure into two projects with modules
 
 **Prompt:**
 > the code looks solid but i don't like the distribution of the files, let's consider the static
@@ -315,7 +271,7 @@ every command myself.
 
 ---
 
-### P19 (2026-10-31): Implement the modular refactor
+### P16 (2026-10-31): Implement the modular refactor
 
 **Prompt:**
 > yes go ahead, add the loadbalancer module and apply other suggestions but always remember i will
@@ -342,6 +298,35 @@ files only use known keys, and the embedded app code is unchanged. The suggestio
 app code out of user data was deferred, as agreed. No commands were run against AWS or git.
 
 **My action:** _(fill in)_
+
+---
+
+### P17 (2026-10-31): Deploy the static site
+
+**Prompt:**
+> PR merged, let's start deploying the static site to AWS.
+
+**LLM response (summary):** Gave the step-by-step PowerShell commands for me to run: sync
+`main` and create a testing branch, lint, create the artifacts bucket, package, deploy, read the
+outputs, and run four `curl` checks (HTTPS 200 with security headers, HTTP→HTTPS redirect,
+custom 404, direct S3 access denied). Also gave troubleshooting commands for nested-stack
+failures and a reminder to destroy the stack afterwards.
+
+**My action:** _(fill in)_
+
+---
+
+### P18 (2026-10-31): Deploy from main
+
+**Prompt:**
+> i won't deploy from a branch let's deploy from main
+
+**LLM response (summary):** Agreed: deploys run from `main`, the reviewed and merged code, and
+a branch is only created when a file needs to change (fixes or test evidence). Gave the
+commands to switch to `main` and deploy.
+
+**My action:** Decided to always deploy from `main` and use branches only for code or
+documentation changes.
 
 ---
 
