@@ -386,6 +386,60 @@ Resources:
       SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
       SecurityGroupIds: [!Ref EndpointSecurityGroup]
 
+  # --- VPC Flow Logs: record every accepted and rejected connection -----------
+  # Network audit trail for security investigations and troubleshooting
+  # (e.g. proving the database only receives traffic from the app tier).
+  FlowLogsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /vpc/${StudentId}-${EnvironmentName}-flow-logs
+      RetentionInDays: 14 # keep costs bounded; long enough for a lab review
+
+  # Role that the VPC Flow Logs service assumes to write into the log group.
+  FlowLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Allows VPC Flow Logs to publish to CloudWatch Logs.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+            # Confused-deputy protection: only flow logs from this account.
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        # Least privilege: write to this one log group only.
+        - PolicyName: WriteFlowLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !GetAtt FlowLogsLogGroup.Arn
+
+  VpcFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceType: VPC
+      ResourceId: !Ref Vpc
+      TrafficType: ALL # both ACCEPT and REJECT records
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogsLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogsRole.Arn
+      MaxAggregationInterval: 600 # 10-minute aggregation (cheapest)
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-vpc-flow-log
+
 Outputs:
   VpcId:
     Description: ID of the VPC.

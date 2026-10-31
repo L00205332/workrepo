@@ -12,7 +12,7 @@ This README is the lab write-up for the assignment.
 > **Always destroy the stacks when you finish.** This project runs on a free-tier AWS account
 > with limited credits. Every deploy session ends with the clean-up steps in
 > [section 10](#10-clean-up), followed by a check that nothing is left running. The three-tier
-> stack costs about $2-3 per day while it exists, even when idle.
+> stack costs about $3-4 per day while it exists, even when idle.
 
 ---
 
@@ -41,10 +41,14 @@ _TODO: a short summary of what the project delivers._
 │   │   ├── networking.yaml     # VPC, subnets, route tables, security groups, VPC endpoints
 │   │   ├── loadbalancer.yaml   # web tier: Application Load Balancer
 │   │   ├── compute.yaml        # application tier: EC2 Auto Scaling group + app
-│   │   └── database.yaml       # database tier: RDS PostgreSQL
+│   │   ├── database.yaml       # database tier: RDS PostgreSQL (Multi-AZ)
+│   │   └── monitoring.yaml     # CloudWatch alarms + RDS events -> SNS email
+│   ├── app/
+│   │   ├── app.py              # application tier source: Python UI + JSON API
+│   │   └── app.service         # hardened systemd unit that runs the app
 │   └── parameters/dev.json
 ├── .github/workflows/
-│   └── cfn-validate.yml        # CI: cfn-lint + cfn-nag on every pull request
+│   └── cfn-validate.yml        # CI: cfn-lint, ruff (app) and cfn-nag on every pull request
 ├── .cfnlintrc.yaml             # cfn-lint configuration (lints every template)
 ├── PROMPTS.md            # Declared tutorials and LLM prompts
 └── README.md             # This write-up
@@ -242,9 +246,15 @@ APP TIER  |  EC2 Auto Scaling group   |   private subnets 10.0.2.0/24, 10.0.3.0/
           +------------+-------------+
                        |  :5432 TLS (app security group only)
           +------------v-------------+
-DB TIER   |  RDS PostgreSQL           |   isolated subnets 10.0.4.0/24, 10.0.5.0/24
+DB TIER   |  RDS PostgreSQL Multi-AZ  |   isolated subnets 10.0.4.0/24, 10.0.5.0/24
+          |  primary (AZ a or b)      |   synchronous replication
+          |  standby (other AZ)       |   automatic failover, same endpoint
           +--------------------------+
 ```
+
+Every tier spans both Availability Zones: the ALB has a node in each public subnet, the Auto
+Scaling group keeps one instance per AZ, and the database runs Multi-AZ. Losing a whole AZ does
+not take the application down.
 
 | Path | Tier | What it does |
 |------|------|--------------|
@@ -254,12 +264,101 @@ DB TIER   |  RDS PostgreSQL           |   isolated subnets 10.0.4.0/24, 10.0.5.0
 
 | Module | Tier | Contents |
 |--------|------|----------|
-| `networking.yaml` | All | VPC, 6 subnets, route tables, Internet Gateway, security groups, VPC endpoints |
-| `loadbalancer.yaml` | Web | Application Load Balancer, target group, HTTP listener |
-| `compute.yaml` | Application | IAM role, launch template (with the app in user data), Auto Scaling group, scaling policy |
-| `database.yaml` | Database | DB subnet group, RDS PostgreSQL instance |
+| `networking.yaml` | All | VPC, 6 subnets, route tables, Internet Gateway, security groups, VPC endpoints, VPC Flow Logs |
+| `loadbalancer.yaml` | Web | Application Load Balancer, target group, HTTP listener, access-log bucket (auto-emptied on delete) |
+| `compute.yaml` | Application | IAM role, launch template (bootstrap script that installs the app release), Auto Scaling group, scaling policy |
+| `database.yaml` | Database | DB subnet group, RDS PostgreSQL instance (Multi-AZ, backup and maintenance windows) |
+| `monitoring.yaml` | All | SNS topic + email subscription, 9 CloudWatch alarms, RDS event subscription |
 
-Creation order: `networking`, then `database` and `loadbalancer` in parallel, then `compute`.
+Creation order: `networking`, then `database` and `loadbalancer` in parallel, then `compute`,
+then `monitoring` (it needs the names and IDs of the resources it watches).
+
+#### Database high availability (Multi-AZ)
+
+`DBMultiAZ` defaults to `true` (see [`parameters/dev.json`](three-tier/parameters/dev.json)):
+
+- **Synchronous standby:** RDS keeps a standby replica in the other AZ, in the second isolated
+  DB subnet. Every committed write is stored in both AZs before it is acknowledged, so a
+  failover loses no committed data.
+- **Automatic failover:** if the primary, its AZ or its storage fails, RDS promotes the standby,
+  typically within 1-2 minutes, and repoints the endpoint DNS name. The application keeps the
+  same `DB_HOST`.
+- **Application side:** the app opens a new connection per request with a 5-second connect
+  timeout. During a failover, `/api/visits` returns `503 database unavailable` and then
+  recovers without a restart. `/api/health` does not touch the database, so the ALB keeps the
+  instances in service throughout.
+- **Maintenance:** with Multi-AZ, patches are applied to the standby first, followed by a
+  failover. This shortens the maintenance downtime. The windows are set off-peak (UTC): backups
+  `02:00-03:00`, maintenance `sun:03:30-sun:04:30`.
+- **Trade-off:** the standby doubles the database cost and cannot serve reads (a standby is not
+  a read replica). Aurora would add readable replicas and faster failover at a higher minimum
+  cost. Multi-AZ RDS was chosen as the cost-effective option for this lab.
+
+#### Monitoring, alerting and logging
+
+Every tier reports to CloudWatch, and problems are emailed through one SNS topic. The email
+address is a `NoEcho` stack parameter (`AlertEmail`) that is passed on the command line at
+deploy time. It is never stored in the public repository. AWS sends a confirmation email
+first, and alerts are delivered once the subscription is confirmed.
+
+| Tier | Alarm | Condition | Why |
+|------|-------|-----------|-----|
+| Web | `alb-elb-5xx` | >= 10 load balancer 5xx in 5 min | e.g. `503` when no healthy targets |
+| Web | `alb-target-5xx` | >= 10 application 5xx in 5 min | e.g. `503 database unavailable` |
+| Web | `unhealthy-hosts` | >= 1 unhealthy target for 2 min | an instance failing `/api/health` |
+| Web | `slow-responses` | average response time > 1 s for 5 min | performance degradation |
+| App | `app-cpu-high` | ASG average CPU > 80% for 10 min | scaling (target 50%) not keeping up |
+| DB | `db-cpu-high` | CPU > 80% for 10 min | database overloaded |
+| DB | `db-storage-low` | free storage < 2 GiB | writes stop when storage is full |
+| DB | `db-memory-low` | freeable memory < 100 MiB for 10 min | swapping on a 1 GiB instance |
+| DB | `db-connections-high` | > 60 connections for 10 min | leak or spike near the instance limit |
+
+Every alarm also sends an **OK** notification when it recovers. In addition, an **RDS event
+subscription** emails `failover`, `failure`, `availability` and `low storage` events, so a
+Multi-AZ failover is reported as it happens.
+
+**Logs**
+
+- **VPC Flow Logs** record every accepted and rejected connection in the VPC. They go to the
+  CloudWatch Logs group `/vpc/<L-number>-<env>-flow-logs`, with 14-day retention. A dedicated
+  IAM role is limited to that log group and protected against the confused-deputy problem
+  (`aws:SourceAccount`).
+- **ALB access logs** record one line per request (client, latency, status). They are written
+  to a private, encrypted S3 bucket under `alb/`. Only the regional Elastic Load Balancing
+  account may write there, and objects expire after 30 days.
+- CloudFormation cannot delete a bucket that still contains objects, so a small Lambda custom
+  resource empties the log bucket when the stack is deleted. The ALB depends on that custom
+  resource, so on deletion the ALB is removed first (no more log writes), then the bucket is
+  emptied, then it is deleted.
+
+Cost: 9 alarms fit within the CloudWatch free tier of 10 alarms. Flow log and access log volumes
+are tiny at lab traffic levels.
+
+#### Application releases
+
+The application source is kept in [`three-tier/app/`](three-tier/app/) as ordinary files:
+[`app.py`](three-tier/app/app.py) and [`app.service`](three-tier/app/app.service). It is not
+embedded in the template. This means the code can be linted and reviewed like any other code,
+and the launch template's user data stays a short bootstrap script.
+
+```
+three-tier/app/  --aws s3 cp-->  s3://<artifacts-bucket>/three-tier/app/<AppVersion>/
+                                          |
+                                          | S3 gateway endpoint (no internet access)
+                                          v
+                 EC2 user data: aws s3 cp ... /opt/app/app.py, /etc/systemd/system/app.service
+```
+
+- **Versioned and immutable:** each release is uploaded to its own prefix, for example
+  `three-tier/app/1.0.0/`, and is never overwritten.
+- **Least privilege:** the instance role may only `s3:GetObject` on the prefix of the release
+  it installs.
+- **Zero-downtime rollout:** `AppVersion` is a stack parameter (in `parameters/dev.json`) and
+  appears in the user data. Bumping it creates a new launch template version, and the Auto
+  Scaling group's rolling update (`MinInstancesInService: 1`, `MaxBatchSize: 1`) replaces the
+  instances one at a time.
+- **Rule:** whenever `three-tier/app/` changes, upload it under a new version and bump
+  `AppVersion` before deploying.
 
 _TODO: my explanation of the design decisions._
 
@@ -268,6 +367,11 @@ _TODO: my explanation of the design decisions._
 ```bash
 cfn-lint
 
+# Upload the application release named by AppVersion in parameters/dev.json
+aws s3 cp three-tier/app/ s3://l00205332-cfn-artifacts-eu-west-1/three-tier/app/1.0.0/ \
+  --recursive --exclude "__pycache__/*" \
+  --profile atu --region eu-west-1
+
 aws cloudformation package \
   --profile atu --region eu-west-1 \
   --template-file three-tier/main.yaml \
@@ -275,11 +379,15 @@ aws cloudformation package \
   --s3-prefix three-tier \
   --output-template-file three-tier/packaged-main.yaml
 
+# Parameters come from dev.json, plus AlertEmail from the command line (never committed).
+# Each "Key=Value" pair is passed as a separate argument; names with spaces stay intact.
+mapfile -t OVERRIDES < <(jq -r '.[] | "\(.ParameterKey)=\(.ParameterValue)"' three-tier/parameters/dev.json)
+
 aws cloudformation deploy \
   --profile atu --region eu-west-1 \
   --stack-name l00205332-three-tier-dev \
   --template-file three-tier/packaged-main.yaml \
-  --parameter-overrides file://three-tier/parameters/dev.json \
+  --parameter-overrides "${OVERRIDES[@]}" "AlertEmail=you@example.com" \
   --capabilities CAPABILITY_IAM \
   --tags Project=atu-cloudformation Owner=L00205332 Environment=dev
 
@@ -289,9 +397,25 @@ aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='ApplicationURL'].OutputValue" --output text
 ```
 
-The first deployment takes about 15 minutes (RDS is the slowest resource). Running cost is
-about $2-3 per day (ALB, 2 x t4g.micro, db.t4g.micro, Secrets Manager endpoint), so delete
-the stack after testing.
+PowerShell equivalent of the deploy step:
+
+```powershell
+$overrides = @((Get-Content -Raw three-tier/parameters/dev.json | ConvertFrom-Json) |
+  ForEach-Object { "$($_.ParameterKey)=$($_.ParameterValue)" }) + "AlertEmail=you@example.com"
+
+aws cloudformation deploy --profile atu --region eu-west-1 `
+  --stack-name l00205332-three-tier-dev `
+  --template-file three-tier/packaged-main.yaml `
+  --parameter-overrides $overrides `
+  --capabilities CAPABILITY_IAM `
+  --tags Project=atu-cloudformation Owner=L00205332 Environment=dev
+```
+
+After the first deploy, confirm the SNS subscription from the email AWS sends.
+
+The first deployment takes about 20 minutes (Multi-AZ RDS is the slowest resource). Running
+cost is about $3-4 per day (ALB, 2 x t4g.micro, Multi-AZ db.t4g.micro, Secrets Manager
+endpoint), so delete the stack after testing.
 
 ### 5.3 Testing
 
@@ -403,12 +527,34 @@ request to `main`, on every push to `main`, and on demand:
 | Job | Tool | What it checks | Blocks the PR on |
 |-----|------|----------------|------------------|
 | `cfn-lint` | [cfn-lint](https://github.com/aws-cloudformation/cfn-lint) 1.58.0 | Template syntax, resource properties and values for `eu-west-1`, best-practice rules | Errors |
-| `cfn-nag` | [cfn-nag](https://github.com/stelligent/cfn_nag) | Security anti-patterns: open security groups, missing encryption, broad IAM, public resources | Failures |
+| `app lint (ruff)` | [ruff](https://docs.astral.sh/ruff/) 0.6.9 | Lint and formatting of `three-tier/app/`, targeting Python 3.9 (Amazon Linux 2023) | Lint or format errors |
+| `cfn-nag (advisory)` | [cfn-nag](https://github.com/stelligent/cfn_nag) | Security anti-patterns: open security groups, missing encryption, broad IAM, public resources | Never (report-only) |
 
-Warnings are printed in the job log but do not block a merge. When a finding is an intentional
-design decision, it is suppressed in the template with a written reason, so every exception is
+cfn-lint warnings are printed but do not block a merge. When a finding is an intentional design
+decision, it is suppressed in the template with a written reason, so every exception is
 documented next to the code it applies to. For example, RDS deletion protection (`F80`) is off
 because the lab stack must be destroyed after every session.
+
+**How the cfn-nag policy evolved (PRs #10 to #12):**
+
+1. **#10** added the workflow with cfn-nag set to block on FAILURES. Its first run found a real
+   issue, `F24`: the RDS master username was a plain parameter. The PR was merged before the
+   check passed, so `main` went red.
+2. **#11** fixed `F24` properly, with no suppression: the database module's `DBUsername`
+   parameter is now `NoEcho`, and `main` went green again.
+3. **#12** made cfn-nag **advisory** (`continue-on-error: true`). Its findings stay visible in
+   every run, but they no longer block merges.
+
+The remaining cfn-nag warnings are known and accepted for this lab:
+
+| Rule | Resource | Finding | Status |
+|------|----------|---------|--------|
+| W2, W9 | ALB security group | Ingress open to `0.0.0.0/0` | Intentional: a public load balancer must accept all clients |
+| W5 | App security group | Egress `0.0.0.0/0` on port 443 | Low risk: app subnets have no internet route, only VPC endpoints |
+| W56 | HTTP listener | Not HTTPS | Suppressed with a reason: requires an ACM certificate and a domain |
+| W52 | ALB | No access logging | **Resolved**: ALB access logs to S3 (monitoring improvement) |
+| W60 | VPC | No flow logs | **Resolved**: VPC Flow Logs to CloudWatch Logs (monitoring improvement) |
+| W47 | SNS topic | No KMS encryption | Suppressed with a reason: CloudWatch alarms cannot publish to a topic encrypted with the AWS-managed key |
 
 ## 7. Taking it to the next level
 
@@ -431,7 +577,9 @@ All tutorials and LLM prompts used are declared in [PROMPTS.md](PROMPTS.md).
 aws cloudformation delete-stack --profile atu --region eu-west-1 --stack-name l00205332-static-site-dev
 aws cloudformation wait stack-delete-complete --profile atu --region eu-west-1 --stack-name l00205332-static-site-dev
 
-# Three-tier: RDS keeps a final snapshot (DeletionPolicy: Snapshot). Delete it afterwards.
+# Three-tier: the ALB access-log bucket is emptied automatically, and the flow-log group
+# is deleted with the stack. RDS keeps a final snapshot (DeletionPolicy: Snapshot);
+# delete it afterwards.
 aws cloudformation delete-stack --profile atu --region eu-west-1 --stack-name l00205332-three-tier-dev
 aws cloudformation wait stack-delete-complete --profile atu --region eu-west-1 --stack-name l00205332-three-tier-dev
 aws rds describe-db-snapshots --profile atu --region eu-west-1 --snapshot-type manual \

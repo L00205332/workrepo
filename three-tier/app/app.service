@@ -1,0 +1,22 @@
+# systemd unit for the three-tier demo application.
+# Installed to /etc/systemd/system/app.service by the launch template user data.
+# Runs as an unprivileged user with sandboxing options that limit what the process can do.
+[Unit]
+Description=Three-tier demo application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=app
+Group=app
+EnvironmentFile=/etc/app.env
+ExecStart=/usr/bin/python3 /opt/app/app.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

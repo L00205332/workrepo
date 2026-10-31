@@ -357,6 +357,109 @@ section in README 6.5. cfn-nag could not be run locally (no Ruby), so its first 
 
 ---
 
+### P20 (2026-10-31): PR strategy and cfn-nag policy
+
+**Prompts:**
+> why 4 PRs ? why can't we create 1 branch for all changes ?
+
+> two PRs (CI, then the rest)
+
+> i don't like cfn-nag it's causing a lot of problems
+
+> Option B
+
+**LLM response (summary):** Explained the trade-off between one PR per feature (matches the
+brief's "regular PRs", easier review and rollback, isolated testing) and a single branch (less
+overhead, one paid AWS test session). Suggested a middle ground: CI first, then one branch with
+one commit per feature. After cfn-nag's first FAILURE (F24, fixed by making the DB username
+`NoEcho`), listed four options: keep cfn-nag with branch protection, make it report-only,
+replace it with Checkov, or remove it. Implemented option B: the cfn-nag job is advisory
+(`continue-on-error: true`), and cfn-lint errors still block merges.
+
+**My action:** Chose two PRs (CI, then the remaining features as separate commits on one
+branch) and made cfn-nag advisory, keeping the F24 fix.
+
+---
+
+### P21 (2026-10-31): Move the application out of user data
+
+**Prompt:** _(feature 4 of the list in P19, implemented on `feature/next-level`)_
+> Move the Python app out of user data into three-tier/app/
+
+**LLM response (summary):**
+- Extracted the app into `three-tier/app/app.py` and `three-tier/app/app.service`, formatted
+  with ruff.
+- The compute module's user data is now a short bootstrap. It downloads the release from
+  `s3://<artifacts>/three-tier/app/<AppVersion>/` through the S3 gateway endpoint.
+- Added the `ArtifactsBucketName` and `AppVersion` (semver) parameters, plus an IAM policy that
+  is scoped to that single release prefix.
+- Because `AppVersion` is part of the user data, bumping it triggers a rolling instance update.
+- Added an `app lint (ruff)` CI job, pinned to ruff 0.6.9 and targeting Python 3.9 (Amazon
+  Linux 2023).
+- Updated the README: structure, an "Application releases" section, and the upload step in the
+  deployment instructions.
+
+**My action:** _(fill in)_
+
+---
+
+### P22 (2026-10-31): Multi-AZ RDS
+
+**Prompt:**
+> committed, go ahead with Multi-AZ RDS
+
+**LLM response (summary):**
+- `DBMultiAZ` now defaults to `true` in the root stack and in `parameters/dev.json`.
+- Added explanatory comments on Multi-AZ failover behaviour to the database module, plus
+  non-overlapping off-peak windows: backups `02:00-03:00` and maintenance
+  `sun:03:30-sun:04:30` (UTC).
+- Exposed the RDS instance identifier as a new `DatabaseInstanceId` output, so failover can be
+  tested and the database monitored.
+- README: the architecture diagram now shows the primary and standby, with a note that every
+  tier spans both AZs. Added a "Database high availability" section (synchronous standby,
+  automatic failover, how the app behaves during failover, maintenance, and the cost trade-off
+  against Aurora). Updated the deploy-time (about 20 minutes) and cost (about $3-4/day)
+  estimates.
+- cfn-lint passes.
+
+**My action:** _(fill in)_
+
+---
+
+### P23 (2026-10-31): Monitoring, alerting, access logs and flow logs
+
+**Prompt:**
+> committed, include the access logs and flow logs too
+
+**LLM response (summary):**
+- **New `monitoring` module:** an SNS topic with an email subscription (`AlertEmail` is a
+  `NoEcho` root parameter with email validation, passed on the command line and never stored
+  in the repo), and 9 CloudWatch alarms:
+  - ALB: ELB 5xx, target 5xx, unhealthy hosts, slow responses
+  - Auto Scaling group: CPU high
+  - RDS: CPU, free storage, freeable memory, connections
+
+  Every alarm also sends an OK notification. An RDS event subscription emails failover,
+  failure, availability and low-storage events. Wired in as the fifth nested stack, created
+  last.
+- **Networking module:** VPC Flow Logs (ALL traffic) to a CloudWatch Logs group with 14-day
+  retention. The IAM role is scoped to that log group and has an `aws:SourceAccount` condition.
+- **Loadbalancer module:** ALB access logs to a private, encrypted S3 bucket. Only the
+  regional ELB account may write to the `alb/` prefix, and objects expire after 30 days. A
+  Lambda custom resource empties the bucket on stack deletion, and `DependsOn` ordering
+  removes the ALB before the bucket is emptied. New outputs give the ALB and target group
+  names in CloudWatch dimension format.
+- **cfn-nag:** W52 and W60 are now resolved. W56 (HTTP listener) and W47 (unencrypted SNS
+  topic) are suppressed with written reasons.
+- **README:** structure, module table, creation order, a "Monitoring, alerting and logging"
+  section, deploy commands that add `AlertEmail` to the `dev.json` values (bash and
+  PowerShell, checked locally), the cfn-nag table and the clean-up notes.
+- cfn-lint passes. All module parameters and outputs were cross-checked.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title

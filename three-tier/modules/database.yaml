@@ -75,11 +75,19 @@ Resources:
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
       StorageEncrypted: true # encryption at rest with the AWS-managed KMS key
+      # High availability: RDS keeps a synchronous standby replica in the other
+      # Availability Zone. On failure (or a forced failover) it promotes the
+      # standby and repoints the endpoint DNS name, so the application keeps
+      # using the same endpoint and only needs to reconnect.
       MultiAZ: !If [UseMultiAZ, true, false]
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups: [!Ref DBSecurityGroupId]
       PubliclyAccessible: false
       BackupRetentionPeriod: 7
+      # Off-peak windows (UTC) that do not overlap. With Multi-AZ, maintenance
+      # is applied to the standby first and then fails over, minimising downtime.
+      PreferredBackupWindow: "02:00-03:00"
+      PreferredMaintenanceWindow: "sun:03:30-sun:04:30"
       CopyTagsToSnapshot: true
       AutoMinorVersionUpgrade: true
       DeletionProtection: false # lab stack; set true for production
@@ -97,3 +105,6 @@ Outputs:
   DBSecretArn:
     Description: Secrets Manager ARN holding the master credentials.
     Value: !GetAtt DBInstance.MasterUserSecret.SecretArn
+  DBInstanceId:
+    Description: RDS instance identifier (used for failover tests and monitoring).
+    Value: !Ref DBInstance
