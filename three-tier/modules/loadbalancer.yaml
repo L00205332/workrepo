@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Three-tier / loadbalancer module (web tier) - internet-facing Application
+  Load Balancer in the public subnets, forwarding to the application tier.
+
+Parameters:
+  StudentId:
+    Type: String
+    Description: ATU student number, used in names and tags.
+  EnvironmentName:
+    Type: String
+    Description: Deployment environment, used in names and tags.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the target group (from the networking module).
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for the load balancer (from the networking module).
+  AlbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Load balancer security group (from the networking module).
+
+Resources:
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroupId]
+      LoadBalancerAttributes:
+        # Reject malformed headers (protects against HTTP request smuggling).
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: "true"
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-alb
+
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      TargetType: instance
+      Protocol: HTTP
+      Port: 8080
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        # Shorter drain time speeds up deployments for this small app.
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-app-tg
+
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+Outputs:
+  TargetGroupArn:
+    Description: Target group that the application Auto Scaling group registers with.
+    Value: !Ref AppTargetGroup
+  LoadBalancerDNSName:
+    Description: Public DNS name of the load balancer.
+    Value: !GetAtt ApplicationLoadBalancer.DNSName

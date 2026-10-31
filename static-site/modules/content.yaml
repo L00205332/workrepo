@@ -1,177 +1,33 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Part A(a) - Static website for L00205332. Content is stored in a private,
-  encrypted S3 bucket and served publicly over HTTPS through Amazon CloudFront
-  using Origin Access Control (OAC). A small Lambda-backed custom resource
-  writes the web pages into the bucket at deploy time and empties the bucket on
-  stack deletion, so the whole site is created and destroyed by one template.
+  Static site / content module - Lambda-backed custom resource that writes the
+  web pages into the bucket on create/update, invalidates the CloudFront cache
+  on update, and empties the bucket on delete.
 
-# ---------------------------------------------------------------------------
-# Parameters: values that change between deployments are not hard-coded.
-# ---------------------------------------------------------------------------
 Parameters:
   StudentName:
     Type: String
     Description: Full name shown in the website header.
-    Default: Mohamed Hanafi Sayed Khalifa Ismail
-    MinLength: 1
-    MaxLength: 100
-
   StudentId:
     Type: String
-    Description: ATU student number (L-number) shown in the website header.
-    Default: L00205332
-    AllowedPattern: "^L[0-9]{8}$"
-    ConstraintDescription: Must be an ATU L-number, e.g. L00205332.
-
+    Description: ATU student number shown in the website header.
   EnvironmentName:
     Type: String
-    Description: Deployment environment, used in resource names and tags.
-    Default: dev
-    AllowedValues: [dev, test, prod]
-
-  PriceClass:
+    Description: Deployment environment, shown on the page and used in tags.
+  RootStackName:
     Type: String
-    Description: >-
-      CloudFront edge locations to use. PriceClass_100 (North America and
-      Europe) is the cheapest and suits an Ireland-based audience.
-    Default: PriceClass_100
-    AllowedValues: [PriceClass_100, PriceClass_200, PriceClass_All]
-
-# ---------------------------------------------------------------------------
-# Mappings: AWS-managed CloudFront policy IDs (fixed, global values).
-# Using managed policies avoids re-implementing well-tested defaults.
-# ---------------------------------------------------------------------------
-Mappings:
-  CloudFrontManagedPolicies:
-    CachePolicy:
-      CachingOptimized: 658327ea-f89d-4fab-a63d-7e88639e58f6
-    ResponseHeadersPolicy:
-      SecurityHeaders: 67f7725c-6f97-4210-82d7-5512b31e9d03
+    Description: Name of the root (main) stack, shown on the page.
+  BucketName:
+    Type: String
+    Description: Website content bucket (from the storage module).
+  BucketArn:
+    Type: String
+    Description: ARN of the website content bucket (from the storage module).
+  DistributionId:
+    Type: String
+    Description: CloudFront distribution to invalidate on update (from the cdn module).
 
 Resources:
-  # -------------------------------------------------------------------------
-  # Storage tier: private S3 bucket that holds the static web pages.
-  # -------------------------------------------------------------------------
-  WebsiteBucket:
-    Type: AWS::S3::Bucket
-    # Content is regenerated from this template, so the bucket is safe to delete.
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      # No BucketName: CloudFormation generates a globally unique name, which
-      # avoids name collisions and allows the stack to be deployed many times.
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256 # SSE-S3 encryption at rest
-      # Block every form of public access; only CloudFront can read objects.
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      # Disable ACLs entirely; access is controlled by the bucket policy only.
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
-      # Versioning keeps previous page versions so a bad deploy can be rolled back.
-      VersioningConfiguration:
-        Status: Enabled
-      # Expire old versions after 30 days to keep storage costs down.
-      LifecycleConfiguration:
-        Rules:
-          - Id: ExpireOldVersions
-            Status: Enabled
-            NoncurrentVersionExpiration:
-              NoncurrentDays: 30
-      Tags:
-        - Key: Name
-          Value: !Sub ${StudentId}-${EnvironmentName}-website-content
-
-  WebsiteBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref WebsiteBucket
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          # Least privilege: only THIS CloudFront distribution may read objects.
-          - Sid: AllowCloudFrontServicePrincipalReadOnly
-            Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
-            Action: s3:GetObject
-            Resource: !Sub ${WebsiteBucket.Arn}/*
-            Condition:
-              StringEquals:
-                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
-          # Reject any request that does not use TLS (encryption in transit).
-          - Sid: DenyInsecureTransport
-            Effect: Deny
-            Principal: "*"
-            Action: s3:*
-            Resource:
-              - !GetAtt WebsiteBucket.Arn
-              - !Sub ${WebsiteBucket.Arn}/*
-            Condition:
-              Bool:
-                aws:SecureTransport: "false"
-
-  # -------------------------------------------------------------------------
-  # Public-facing web service: CloudFront CDN in front of the private bucket.
-  # -------------------------------------------------------------------------
-  OriginAccessControl:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: !Sub ${AWS::StackName}-oac
-        Description: Lets CloudFront sign requests to the private S3 origin.
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  Distribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Comment: !Sub ${StudentId} static website (${EnvironmentName})
-        Enabled: true
-        DefaultRootObject: index.html
-        HttpVersion: http2and3
-        IPV6Enabled: true
-        PriceClass: !Ref PriceClass
-        Origins:
-          - Id: S3WebsiteOrigin
-            # Regional endpoint avoids redirects while a new bucket's DNS propagates.
-            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
-            OriginAccessControlId: !GetAtt OriginAccessControl.Id
-            S3OriginConfig:
-              OriginAccessIdentity: "" # empty: OAC replaces the legacy OAI
-        DefaultCacheBehavior:
-          TargetOriginId: S3WebsiteOrigin
-          ViewerProtocolPolicy: redirect-to-https # force HTTPS for visitors
-          AllowedMethods: [GET, HEAD]
-          CachedMethods: [GET, HEAD]
-          Compress: true # gzip/brotli for faster page loads
-          CachePolicyId: !FindInMap [CloudFrontManagedPolicies, CachePolicy, CachingOptimized]
-          # Adds HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, etc.
-          ResponseHeadersPolicyId: !FindInMap [CloudFrontManagedPolicies, ResponseHeadersPolicy, SecurityHeaders]
-        # S3 returns 403 for missing keys when the bucket is private; show a
-        # friendly error page with the correct 404 status instead.
-        CustomErrorResponses:
-          - ErrorCode: 403
-            ResponseCode: 404
-            ResponsePagePath: /error.html
-            ErrorCachingMinTTL: 60
-          - ErrorCode: 404
-            ResponseCode: 404
-            ResponsePagePath: /error.html
-            ErrorCachingMinTTL: 60
-      Tags:
-        - Key: Name
-          Value: !Sub ${StudentId}-${EnvironmentName}-website-cdn
-
   # -------------------------------------------------------------------------
   # Content deployment: Lambda-backed custom resource.
   # CloudFormation cannot upload files to S3 by itself, so this function
@@ -203,13 +59,13 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                   - s3:DeleteObjectVersion
-                Resource: !Sub ${WebsiteBucket.Arn}/*
+                Resource: !Sub ${BucketArn}/*
               - Effect: Allow
                 Action: s3:ListBucketVersions
-                Resource: !GetAtt WebsiteBucket.Arn
+                Resource: !Ref BucketArn
               - Effect: Allow
                 Action: cloudfront:CreateInvalidation
-                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${DistributionId}
 
   ContentDeployerFunction:
     Type: AWS::Lambda::Function
@@ -297,13 +153,12 @@ Resources:
   # !Sub injects the student name and ID from the parameters into the HTML.
   WebsiteContent:
     Type: Custom::WebsiteContent
-    DependsOn:
-      - ContentDeployerLogGroup
-      - WebsiteBucketPolicy
+    # Log group first, so the function's first invocation is logged with retention.
+    DependsOn: ContentDeployerLogGroup
     Properties:
       ServiceToken: !GetAtt ContentDeployerFunction.Arn
-      BucketName: !Ref WebsiteBucket
-      DistributionId: !Ref Distribution
+      BucketName: !Ref BucketName
+      DistributionId: !Ref DistributionId
       Files:
         - Key: index.html
           ContentType: text/html; charset=utf-8
@@ -331,7 +186,7 @@ Resources:
                 <section>
                   <h2>Deployment details</h2>
                   <ul>
-                    <li>Stack: <code>${AWS::StackName}</code></li>
+                    <li>Stack: <code>${RootStackName}</code></li>
                     <li>Region: <code>${AWS::Region}</code></li>
                     <li>Environment: <code>${EnvironmentName}</code></li>
                   </ul>
@@ -373,16 +228,7 @@ Resources:
             footer { text-align: center; padding: 1.5rem 1rem; font-size: .9rem; color: #5a6b69; }
             a { color: var(--brand); }
 
-# ---------------------------------------------------------------------------
-# Outputs: values needed to test and operate the site.
-# ---------------------------------------------------------------------------
 Outputs:
-  WebsiteURL:
-    Description: Public HTTPS URL of the website.
-    Value: !Sub https://${Distribution.DomainName}
-  BucketName:
-    Description: S3 bucket that stores the website content.
-    Value: !Ref WebsiteBucket
-  DistributionId:
-    Description: CloudFront distribution ID (for cache invalidations).
-    Value: !Ref Distribution
+  ContentDeployerFunctionName:
+    Description: Lambda function that deploys the website content.
+    Value: !Ref ContentDeployerFunction

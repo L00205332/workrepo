@@ -1,9 +1,12 @@
 # cfn-lint configuration: run `cfn-lint` from the repo root with no arguments.
 # Docs: https://github.com/aws-cloudformation/cfn-lint
 
-# Every CloudFormation template in the project.
+# Every CloudFormation template in both projects (root stacks and modules).
 templates:
-  - templates/**/*.yaml
+  - static-site/main.yaml
+  - static-site/modules/*.yaml
+  - three-tier/main.yaml
+  - three-tier/modules/*.yaml
 
 # Validate resource types and properties against the deployment region.
 regions:
@@ -12,3 +15,8 @@ regions:
 # Also report informational (I) findings, not only errors (E) and warnings (W).
 include_checks:
   - I
+
+# W3002 warns that a local TemplateURL only works with `aws cloudformation package`.
+# That is intentional: the root stacks are always packaged before deployment.
+ignore_checks:
+  - W3002

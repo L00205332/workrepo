@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Static site / cdn module - public-facing web service. CloudFront serves the
+  private S3 bucket over HTTPS using Origin Access Control (OAC). The bucket
+  policy lives here because it must reference this distribution.
+
+Parameters:
+  StudentId:
+    Type: String
+    Description: ATU student number, used in names and tags.
+  EnvironmentName:
+    Type: String
+    Description: Deployment environment, used in names and tags.
+  PriceClass:
+    Type: String
+    Description: CloudFront edge locations to use.
+    AllowedValues: [PriceClass_100, PriceClass_200, PriceClass_All]
+  BucketName:
+    Type: String
+    Description: Website content bucket (from the storage module).
+  BucketArn:
+    Type: String
+    Description: ARN of the website content bucket (from the storage module).
+  BucketRegionalDomainName:
+    Type: String
+    Description: Regional S3 endpoint used as the origin (from the storage module).
+
+# AWS-managed CloudFront policy IDs (fixed, global values). Managed policies
+# avoid re-implementing well-tested defaults.
+Mappings:
+  CloudFrontManagedPolicies:
+    CachePolicy:
+      CachingOptimized: 658327ea-f89d-4fab-a63d-7e88639e58f6
+    ResponseHeadersPolicy:
+      SecurityHeaders: 67f7725c-6f97-4210-82d7-5512b31e9d03
+
+Resources:
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-oac
+        Description: Lets CloudFront sign requests to the private S3 origin.
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub ${StudentId} static website (${EnvironmentName})
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: !Ref PriceClass
+        Origins:
+          - Id: S3WebsiteOrigin
+            # Regional endpoint avoids redirects while a new bucket's DNS propagates.
+            DomainName: !Ref BucketRegionalDomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: "" # empty: OAC replaces the legacy OAI
+        DefaultCacheBehavior:
+          TargetOriginId: S3WebsiteOrigin
+          ViewerProtocolPolicy: redirect-to-https # force HTTPS for visitors
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true # gzip/brotli for faster page loads
+          CachePolicyId: !FindInMap [CloudFrontManagedPolicies, CachePolicy, CachingOptimized]
+          # Adds HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, etc.
+          ResponseHeadersPolicyId: !FindInMap [CloudFrontManagedPolicies, ResponseHeadersPolicy, SecurityHeaders]
+        # S3 returns 403 for missing keys when the bucket is private; show a
+        # friendly error page with the correct 404 status instead.
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 60
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-website-cdn
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Least privilege: only THIS CloudFront distribution may read objects.
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${BucketArn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+          # Reject any request that does not use TLS (encryption in transit).
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !Ref BucketArn
+              - !Sub ${BucketArn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+Outputs:
+  DistributionId:
+    Description: CloudFront distribution ID (for cache invalidations).
+    Value: !Ref Distribution
+  DistributionDomainName:
+    Description: CloudFront domain name of the website.
+    Value: !GetAtt Distribution.DomainName

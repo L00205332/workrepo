@@ -1,0 +1,410 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Three-tier / networking module - VPC across two AZs with public, app and
+  isolated DB subnets, route tables, security groups for every tier, and VPC
+  endpoints (no NAT Gateway).
+
+Parameters:
+  StudentId:
+    Type: String
+    Description: ATU student number, used in names and tags.
+  EnvironmentName:
+    Type: String
+    Description: Deployment environment, used in names and tags.
+  VpcCidr:
+    Type: String
+    Description: IPv4 CIDR block for the VPC. Six /24 subnets are carved out of it.
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/(1[6-9]|2[0-4])$"
+  EnableSessionManager:
+    Type: String
+    Description: Create the SSM VPC endpoints for Session Manager access.
+    AllowedValues: ["true", "false"]
+
+Conditions:
+  CreateSsmEndpoints: !Equals [!Ref EnableSessionManager, "true"]
+
+Resources:
+  # VPC across 2 AZs with one subnet per tier per AZ (6 subnets).
+  #   public-a/b : web tier (ALB)          route to the Internet Gateway
+  #   app-a/b    : application tier (EC2)  no internet route, VPC endpoints only
+  #   db-a/b     : database tier (RDS)     no routes beyond the VPC at all
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true # required for interface endpoint private DNS
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-vpc
+
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-igw
+
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+
+  # --- Subnets: !Cidr splits the VPC range into six /24 blocks -------------
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: false # only the ALB lives here; nothing needs auto public IPs
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-public-a
+        - Key: Tier
+          Value: web
+
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-public-b
+        - Key: Tier
+          Value: web
+
+
+  AppSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 6, 8]]
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-app-a
+        - Key: Tier
+          Value: app
+
+
+  AppSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 6, 8]]
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-app-b
+        - Key: Tier
+          Value: app
+
+
+  DBSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [4, !Cidr [!Ref VpcCidr, 6, 8]]
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-db-a
+        - Key: Tier
+          Value: db
+
+
+  DBSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [5, !Cidr [!Ref VpcCidr, 6, 8]]
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-db-b
+        - Key: Tier
+          Value: db
+
+
+  # --- Route tables ---------------------------------------------------------
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-public-rt
+
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+
+  PublicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+
+  PublicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+
+  # App subnets: local VPC routes plus the S3 gateway endpoint route only.
+  AppRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-app-rt
+
+
+  AppSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnetA
+      RouteTableId: !Ref AppRouteTable
+
+
+  AppSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AppSubnetB
+      RouteTableId: !Ref AppRouteTable
+
+
+  # DB subnets: isolated, local VPC routes only.
+  DBRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-db-rt
+
+
+  DBSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DBSubnetA
+      RouteTableId: !Ref DBRouteTable
+
+
+  DBSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref DBSubnetB
+      RouteTableId: !Ref DBRouteTable
+
+
+  # --- Security groups: each tier only accepts traffic from the tier in front.
+  #   Internet -80-> ALB -8080-> App -5432-> DB
+  # Cross-references use separate Ingress/Egress resources to avoid
+  # circular dependencies between the groups.
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web tier - public HTTP to the load balancer
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: HTTP from the internet
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Forward to the application tier only
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          DestinationSecurityGroupId: !Ref AppSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-alb-sg
+
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Application tier - traffic from the ALB only
+      VpcId: !Ref Vpc
+      # Inline egress replaces the default allow-all rule. HTTPS is only usable
+      # for VPC endpoints because the app subnets have no internet route.
+      SecurityGroupEgress:
+        - Description: HTTPS to VPC endpoints (S3, Secrets Manager, SSM)
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-app-sg
+
+
+  AppIngressFromAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      Description: App port from the load balancer
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+
+  AppEgressToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref AppSecurityGroup
+      Description: PostgreSQL to the database tier
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      DestinationSecurityGroupId: !Ref DBSecurityGroup
+
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Database tier - PostgreSQL from the application tier only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: PostgreSQL from the application tier
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      # The database never initiates connections; this rule matches nothing and
+      # replaces the default allow-all egress rule.
+      SecurityGroupEgress:
+        - Description: No outbound traffic
+          IpProtocol: "-1"
+          CidrIp: 127.0.0.1/32
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-db-sg
+
+
+  EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Interface VPC endpoints - HTTPS from the application tier
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: HTTPS from the application tier
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      SecurityGroupEgress:
+        - Description: No outbound traffic
+          IpProtocol: "-1"
+          CidrIp: 127.0.0.1/32
+      Tags:
+        - Key: Name
+          Value: !Sub ${StudentId}-${EnvironmentName}-endpoint-sg
+
+
+  # --- VPC endpoints: private access to AWS services instead of a NAT Gateway ---
+
+  # Free gateway endpoint. Amazon Linux 2023 package repositories are hosted
+  # in S3, so `dnf install` works without internet access.
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Gateway
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      RouteTableIds:
+        - !Ref AppRouteTable
+
+
+  # Lets the app read the database credentials from Secrets Manager.
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+
+  # Optional: Session Manager shell access without SSH keys or a bastion.
+  SsmEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateSsmEndpoints
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+
+  SsmMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateSsmEndpoints
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+
+  Ec2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Condition: CreateSsmEndpoints
+    Properties:
+      VpcId: !Ref Vpc
+      VpcEndpointType: Interface
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ec2messages
+      PrivateDnsEnabled: true
+      SubnetIds: [!Ref AppSubnetA, !Ref AppSubnetB]
+      SecurityGroupIds: [!Ref EndpointSecurityGroup]
+
+Outputs:
+  VpcId:
+    Description: ID of the VPC.
+    Value: !Ref Vpc
+  PublicSubnetIds:
+    Description: Web tier subnets (comma-separated).
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB]]
+  AppSubnetIds:
+    Description: Application tier subnets (comma-separated).
+    Value: !Join [",", [!Ref AppSubnetA, !Ref AppSubnetB]]
+  DBSubnetIds:
+    Description: Database tier subnets (comma-separated).
+    Value: !Join [",", [!Ref DBSubnetA, !Ref DBSubnetB]]
+  AlbSecurityGroupId:
+    Description: Security group for the load balancer (web tier).
+    Value: !Ref AlbSecurityGroup
+  AppSecurityGroupId:
+    Description: Security group for the application instances.
+    Value: !Ref AppSecurityGroup
+  DBSecurityGroupId:
+    Description: Security group for the database.
+    Value: !Ref DBSecurityGroup
