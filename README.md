@@ -399,7 +399,26 @@ three-tier/app/  --aws s3 cp-->  s3://<artifacts-bucket>/three-tier/app/<AppVers
 - **Rule:** whenever `three-tier/app/` changes, upload it under a new version and bump
   `AppVersion` before deploying.
 
-_TODO: my explanation of the design decisions._
+#### Design decisions
+
+For each decision below, I list the alternatives I considered, why I chose this option, and
+what it costs or limits.
+
+| # | Decision | Alternatives considered | Why I chose it | Trade-off |
+|---|----------|-------------------------|----------------|-----------|
+| 1 | **Classic VPC three-tier** (ALB, EC2, RDS) | Serverless: API Gateway + Lambda + DynamoDB; two ALBs (web EC2 + app EC2) | The tiers, subnets and security boundaries are explicit and visible, which is what the brief asks to demonstrate | Servers to patch and scale, and a running cost even when idle |
+| 2 | **Two AZs, one subnet per tier per AZ** (six /24s from `!Cidr`) | Single AZ; shared subnets for app and DB | Survives the loss of an AZ, and each tier gets its own routing and isolation | More subnets and route tables to manage |
+| 3 | **No NAT Gateway: VPC endpoints instead** (S3 gateway, Secrets Manager interface, optional SSM) | NAT Gateway in each AZ | About $1/day per NAT Gateway saved. The app tier has **no internet egress at all**, which shrinks the attack surface. Packages still install from the Amazon Linux repos, which are served from S3. | No access to the public internet (e.g. PyPI), so the app is limited to OS packages. Each interface endpoint costs about $0.01/hour per AZ. |
+| 4 | **Security groups that reference each other** (Internet → ALB:80 → app:8080 → DB:5432) | CIDR-based rules | Access follows the role of the resource, not its IP. New instances are covered automatically, and the DB and endpoint groups have no egress. | Cross-references need separate ingress/egress resources to avoid circular dependencies |
+| 5 | **RDS-managed master password in Secrets Manager** | Password as a `NoEcho` parameter; hard-coded password | No secret ever appears in the template, parameters, console or git. RDS rotates it. The app re-reads the secret if a login fails. | The app needs a Secrets Manager endpoint and IAM permission to read one secret |
+| 6 | **Managed PostgreSQL on RDS** | PostgreSQL installed on EC2 | Backups, patching, encryption and failover are handled by AWS | Less control over the engine, and RDS pricing |
+| 7 | **Multi-AZ RDS over Aurora** | Aurora PostgreSQL (Serverless v2, writer + reader) | Synchronous standby with automatic failover at about a quarter of the Aurora cost. Verified with a forced failover (38 s, see 6.4). | The standby cannot serve reads, and failover is slower than Aurora's |
+| 8 | **Health check that does not touch the database** (`/api/health`) | Health check on `/api/visits` | A database outage or failover returns `503` to users but does not make the ALB and Auto Scaling group replace healthy instances. This keeps failures from cascading. | A broken DB connection is not detected by the health check. The `alb-target-5xx` alarm covers that. |
+| 9 | **Graviton `t4g` instances** (arm64) | x86 `t3` instances | Better price/performance, and free-tier eligible sizes | arm64 binaries only, which is not a problem for this Python app |
+| 10 | **App delivered as a versioned S3 release** | App embedded in user data; baked AMI; CodeDeploy | The code lives in the repo and is linted in CI. Releases are immutable. Bumping `AppVersion` triggers a zero-downtime rolling update. | A separate upload step before deploying. A baked AMI would boot faster. |
+| 11 | **Nested-stack modules plus parameter files** | One large template; separate stacks with exports | Each module has one responsibility. The dependency order comes from passing outputs as inputs, and a single root stack deploys and deletes everything. | Needs `aws cloudformation package` and an artifacts bucket, and errors appear in child stacks |
+| 12 | **Explicit deletion behaviour** | Default (delete everything) | RDS takes a final snapshot (`DeletionPolicy: Snapshot`). Log buckets are emptied automatically, so `delete-stack` leaves nothing running. | The final snapshot has to be deleted by hand after each session |
+| 13 | **HTTP on the ALB** | HTTPS with an ACM certificate | No registered domain is available for this lab | Browser-to-ALB traffic is not encrypted. This is a known limitation (see 7.1). |
 
 ### 6.2 Deployment
 
