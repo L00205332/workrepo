@@ -42,9 +42,12 @@ _TODO: a short summary of what the project delivers._
 │   │   ├── loadbalancer.yaml   # web tier: Application Load Balancer
 │   │   ├── compute.yaml        # application tier: EC2 Auto Scaling group + app
 │   │   └── database.yaml       # database tier: RDS PostgreSQL
+│   ├── app/
+│   │   ├── app.py              # application tier source: Python UI + JSON API
+│   │   └── app.service         # hardened systemd unit that runs the app
 │   └── parameters/dev.json
 ├── .github/workflows/
-│   └── cfn-validate.yml        # CI: cfn-lint + cfn-nag on every pull request
+│   └── cfn-validate.yml        # CI: cfn-lint, ruff (app) and cfn-nag on every pull request
 ├── .cfnlintrc.yaml             # cfn-lint configuration (lints every template)
 ├── PROMPTS.md            # Declared tutorials and LLM prompts
 └── README.md             # This write-up
@@ -256,10 +259,36 @@ DB TIER   |  RDS PostgreSQL           |   isolated subnets 10.0.4.0/24, 10.0.5.0
 |--------|------|----------|
 | `networking.yaml` | All | VPC, 6 subnets, route tables, Internet Gateway, security groups, VPC endpoints |
 | `loadbalancer.yaml` | Web | Application Load Balancer, target group, HTTP listener |
-| `compute.yaml` | Application | IAM role, launch template (with the app in user data), Auto Scaling group, scaling policy |
+| `compute.yaml` | Application | IAM role, launch template (bootstrap script that installs the app release), Auto Scaling group, scaling policy |
 | `database.yaml` | Database | DB subnet group, RDS PostgreSQL instance |
 
 Creation order: `networking`, then `database` and `loadbalancer` in parallel, then `compute`.
+
+#### Application releases
+
+The application source is kept in [`three-tier/app/`](three-tier/app/) as ordinary files:
+[`app.py`](three-tier/app/app.py) and [`app.service`](three-tier/app/app.service). It is not
+embedded in the template. This means the code can be linted and reviewed like any other code,
+and the launch template's user data stays a short bootstrap script.
+
+```
+three-tier/app/  --aws s3 cp-->  s3://<artifacts-bucket>/three-tier/app/<AppVersion>/
+                                          |
+                                          | S3 gateway endpoint (no internet access)
+                                          v
+                 EC2 user data: aws s3 cp ... /opt/app/app.py, /etc/systemd/system/app.service
+```
+
+- **Versioned and immutable:** each release is uploaded to its own prefix, for example
+  `three-tier/app/1.0.0/`, and is never overwritten.
+- **Least privilege:** the instance role may only `s3:GetObject` on the prefix of the release
+  it installs.
+- **Zero-downtime rollout:** `AppVersion` is a stack parameter (in `parameters/dev.json`) and
+  appears in the user data. Bumping it creates a new launch template version, and the Auto
+  Scaling group's rolling update (`MinInstancesInService: 1`, `MaxBatchSize: 1`) replaces the
+  instances one at a time.
+- **Rule:** whenever `three-tier/app/` changes, upload it under a new version and bump
+  `AppVersion` before deploying.
 
 _TODO: my explanation of the design decisions._
 
@@ -267,6 +296,11 @@ _TODO: my explanation of the design decisions._
 
 ```bash
 cfn-lint
+
+# Upload the application release named by AppVersion in parameters/dev.json
+aws s3 cp three-tier/app/ s3://l00205332-cfn-artifacts-eu-west-1/three-tier/app/1.0.0/ \
+  --recursive --exclude "__pycache__/*" \
+  --profile atu --region eu-west-1
 
 aws cloudformation package \
   --profile atu --region eu-west-1 \
@@ -403,12 +437,33 @@ request to `main`, on every push to `main`, and on demand:
 | Job | Tool | What it checks | Blocks the PR on |
 |-----|------|----------------|------------------|
 | `cfn-lint` | [cfn-lint](https://github.com/aws-cloudformation/cfn-lint) 1.58.0 | Template syntax, resource properties and values for `eu-west-1`, best-practice rules | Errors |
-| `cfn-nag` | [cfn-nag](https://github.com/stelligent/cfn_nag) | Security anti-patterns: open security groups, missing encryption, broad IAM, public resources | Failures |
+| `app lint (ruff)` | [ruff](https://docs.astral.sh/ruff/) 0.6.9 | Lint and formatting of `three-tier/app/`, targeting Python 3.9 (Amazon Linux 2023) | Lint or format errors |
+| `cfn-nag (advisory)` | [cfn-nag](https://github.com/stelligent/cfn_nag) | Security anti-patterns: open security groups, missing encryption, broad IAM, public resources | Never (report-only) |
 
-Warnings are printed in the job log but do not block a merge. When a finding is an intentional
-design decision, it is suppressed in the template with a written reason, so every exception is
+cfn-lint warnings are printed but do not block a merge. When a finding is an intentional design
+decision, it is suppressed in the template with a written reason, so every exception is
 documented next to the code it applies to. For example, RDS deletion protection (`F80`) is off
 because the lab stack must be destroyed after every session.
+
+**How the cfn-nag policy evolved (PRs #10 to #12):**
+
+1. **#10** added the workflow with cfn-nag set to block on FAILURES. Its first run found a real
+   issue, `F24`: the RDS master username was a plain parameter. The PR was merged before the
+   check passed, so `main` went red.
+2. **#11** fixed `F24` properly, with no suppression: the database module's `DBUsername`
+   parameter is now `NoEcho`, and `main` went green again.
+3. **#12** made cfn-nag **advisory** (`continue-on-error: true`). Its findings stay visible in
+   every run, but they no longer block merges.
+
+The remaining cfn-nag warnings are known and accepted for this lab:
+
+| Rule | Resource | Finding | Status |
+|------|----------|---------|--------|
+| W2, W9 | ALB security group | Ingress open to `0.0.0.0/0` | Intentional: a public load balancer must accept all clients |
+| W5 | App security group | Egress `0.0.0.0/0` on port 443 | Low risk: app subnets have no internet route, only VPC endpoints |
+| W56 | HTTP listener | Not HTTPS | Requires an ACM certificate and a domain |
+| W52 | ALB | No access logging | Candidate for the monitoring improvement |
+| W60 | VPC | No flow logs | Candidate for the monitoring improvement |
 
 ## 7. Taking it to the next level
 

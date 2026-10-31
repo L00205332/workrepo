@@ -357,6 +357,52 @@ section in README 6.5. cfn-nag could not be run locally (no Ruby), so its first 
 
 ---
 
+### P20 (2026-10-31): PR strategy and cfn-nag policy
+
+**Prompts:**
+> why 4 PRs ? why can't we create 1 branch for all changes ?
+
+> two PRs (CI, then the rest)
+
+> i don't like cfn-nag it's causing a lot of problems
+
+> Option B
+
+**LLM response (summary):** Explained the trade-off between one PR per feature (matches the
+brief's "regular PRs", easier review and rollback, isolated testing) and a single branch (less
+overhead, one paid AWS test session). Suggested a middle ground: CI first, then one branch with
+one commit per feature. After cfn-nag's first FAILURE (F24, fixed by making the DB username
+`NoEcho`), listed four options: keep cfn-nag with branch protection, make it report-only,
+replace it with Checkov, or remove it. Implemented option B: the cfn-nag job is advisory
+(`continue-on-error: true`), and cfn-lint errors still block merges.
+
+**My action:** Chose two PRs (CI, then the remaining features as separate commits on one
+branch) and made cfn-nag advisory, keeping the F24 fix.
+
+---
+
+### P21 (2026-10-31): Move the application out of user data
+
+**Prompt:** _(feature 4 of the list in P19, implemented on `feature/next-level`)_
+> Move the Python app out of user data into three-tier/app/
+
+**LLM response (summary):**
+- Extracted the app into `three-tier/app/app.py` and `three-tier/app/app.service`, formatted
+  with ruff.
+- The compute module's user data is now a short bootstrap. It downloads the release from
+  `s3://<artifacts>/three-tier/app/<AppVersion>/` through the S3 gateway endpoint.
+- Added the `ArtifactsBucketName` and `AppVersion` (semver) parameters, plus an IAM policy that
+  is scoped to that single release prefix.
+- Because `AppVersion` is part of the user data, bumping it triggers a rolling instance update.
+- Added an `app lint (ruff)` CI job, pinned to ruff 0.6.9 and targeting Python 3.9 (Amazon
+  Linux 2023).
+- Updated the README: structure, an "Application releases" section, and the upload step in the
+  deployment instructions.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title
