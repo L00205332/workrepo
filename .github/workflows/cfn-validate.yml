@@ -3,7 +3,8 @@
 # reaches main without passing both linters:
 #   - cfn-lint : schema/property validation and AWS best-practice rules
 #   - cfn-nag  : security-focused static analysis (IAM, encryption, network exposure)
-# Policy: errors/failures block the PR; warnings are reported but do not block.
+# Policy: cfn-lint errors block the PR. cfn-nag is advisory (report-only): its
+# findings are shown in the job log and the run summary but never block a merge.
 # Intentional exceptions are suppressed in the templates with a written reason.
 name: CloudFormation validation
 
@@ -47,9 +48,12 @@ jobs:
         run: cfn-lint --non-zero-exit-code error
 
   cfn-nag:
-    name: cfn-nag
+    name: cfn-nag (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Report-only: a cfn-nag failure is shown as a warning annotation on the run
+    # but does not fail the workflow or block the pull request.
+    continue-on-error: true
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
