@@ -1,0 +1,72 @@
+# CloudFormation validation pipeline.
+# Runs on every pull request to main (and on main itself) so that no template
+# reaches main without passing both linters:
+#   - cfn-lint : schema/property validation and AWS best-practice rules
+#   - cfn-nag  : security-focused static analysis (IAM, encryption, network exposure)
+# Policy: errors/failures block the PR; warnings are reported but do not block.
+# Intentional exceptions are suppressed in the templates with a written reason.
+name: CloudFormation validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: # allow a manual run from the Actions tab
+
+# Least privilege for the workflow token: the jobs only read the repository.
+permissions:
+  contents: read
+
+# Cancel an in-progress run when new commits are pushed to the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cfn-lint:
+    name: cfn-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Pinned version so results are reproducible between local runs and CI.
+      - name: Install cfn-lint
+        run: pip install "cfn-lint==1.58.0"
+
+      # Reads .cfnlintrc.yaml (template list, region, ignored checks).
+      # Only error-level findings fail the job; warnings are still printed.
+      - name: Run cfn-lint
+        run: cfn-lint --non-zero-exit-code error
+
+  cfn-nag:
+    name: cfn-nag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Install cfn-nag
+        run: gem install cfn-nag --no-document
+
+      # Scan each project separately and only *.yaml files, so parameter JSON
+      # files and non-CloudFormation YAML (e.g. this workflow) are not parsed.
+      # cfn_nag exits non-zero on FAILURES only; WARNINGS are reported.
+      - name: Scan static-site templates
+        run: cfn_nag_scan --input-path static-site --template-pattern '.*\.yaml$'
+
+      - name: Scan three-tier templates
+        run: cfn_nag_scan --input-path three-tier --template-pattern '.*\.yaml$'
