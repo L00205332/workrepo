@@ -1,0 +1,208 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Part A(b) - Three-tier architecture for L00205332 (root stack).
+  Composes four nested-stack modules:
+    networking    - VPC, subnets, route tables, security groups, VPC endpoints
+    loadbalancer  - web tier: internet-facing Application Load Balancer
+    compute       - application tier: EC2 Auto Scaling group (Python UI + API)
+    database      - database tier: RDS for PostgreSQL
+  Package before deploying so the module paths are uploaded to S3:
+    aws cloudformation package --template-file three-tier/main.yaml ...
+
+# Groups the parameters in the CloudFormation console for readability.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: Owner }
+        Parameters: [StudentId, StudentName, EnvironmentName]
+      - Label: { default: Network }
+        Parameters: [VpcCidr, EnableSessionManager]
+      - Label: { default: Application tier }
+        Parameters: [InstanceType, MinSize, MaxSize, DesiredCapacity]
+      - Label: { default: Database tier }
+        Parameters: [DBInstanceClass, DBName, DBUsername, DBAllocatedStorage, DBMultiAZ]
+
+# ---------------------------------------------------------------------------
+# Parameters: set per environment in parameters/<env>.json
+# Validation lives here, at the single entry point; modules trust these values.
+# ---------------------------------------------------------------------------
+Parameters:
+  StudentId:
+    Type: String
+    Description: ATU student number (L-number), used in names, tags and the UI.
+    AllowedPattern: "^L[0-9]{8}$"
+    ConstraintDescription: Must be an ATU L-number, e.g. L00205332.
+
+  StudentName:
+    Type: String
+    Description: Full name shown in the application UI.
+    MinLength: 1
+    MaxLength: 100
+
+  EnvironmentName:
+    Type: String
+    Description: Deployment environment, used in resource names and tags.
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+  VpcCidr:
+    Type: String
+    Description: IPv4 CIDR block for the VPC. Six /24 subnets are carved out of it.
+    Default: 10.0.0.0/16
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/(1[6-9]|2[0-4])$"
+    ConstraintDescription: Must be a CIDR block between /16 and /24.
+
+  EnableSessionManager:
+    Type: String
+    Description: >-
+      Create the SSM VPC endpoints so instances can be reached with Session Manager
+      (no SSH, no bastion host). Adds about $0.15/hour, so it is off by default.
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  InstanceType:
+    Type: String
+    Description: EC2 instance type for the application tier (Graviton/arm64).
+    Default: t4g.micro
+    AllowedValues: [t4g.micro, t4g.small, t4g.medium]
+
+  MinSize:
+    Type: Number
+    Description: Minimum number of application instances (2 = one per AZ).
+    Default: 2
+    MinValue: 1
+    MaxValue: 4
+
+  MaxSize:
+    Type: Number
+    Description: Maximum number of application instances when scaled out.
+    Default: 4
+    MinValue: 1
+    MaxValue: 8
+
+  DesiredCapacity:
+    Type: Number
+    Description: Starting number of application instances.
+    Default: 2
+    MinValue: 1
+    MaxValue: 8
+
+  DBInstanceClass:
+    Type: String
+    Description: RDS instance class for the database tier.
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small, db.t4g.medium]
+
+  DBName:
+    Type: String
+    Description: Name of the application database.
+    Default: appdb
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9_]{0,62}$"
+
+  DBUsername:
+    Type: String
+    Description: >-
+      Master username. The password is generated and stored in AWS Secrets Manager
+      by RDS, so it never appears in the template, parameters or console.
+    Default: dbadmin
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9_]{0,15}$"
+
+  DBAllocatedStorage:
+    Type: Number
+    Description: Database storage in GiB.
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+
+  DBMultiAZ:
+    Type: String
+    Description: Run a synchronous standby database in the second AZ (doubles DB cost).
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+Resources:
+  # Each TemplateURL is a local path; `aws cloudformation package` uploads the
+  # module to S3 and rewrites the path to the S3 URL. Outputs of one module are
+  # passed as parameters to the next, which also sets the creation order:
+  #   networking -> database + loadbalancer (in parallel) -> compute
+  NetworkingStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/networking.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+        VpcCidr: !Ref VpcCidr
+        EnableSessionManager: !Ref EnableSessionManager
+
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/database.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+        DBSubnetIds: !GetAtt NetworkingStack.Outputs.DBSubnetIds
+        DBSecurityGroupId: !GetAtt NetworkingStack.Outputs.DBSecurityGroupId
+        DBInstanceClass: !Ref DBInstanceClass
+        DBName: !Ref DBName
+        DBUsername: !Ref DBUsername
+        DBAllocatedStorage: !Ref DBAllocatedStorage
+        DBMultiAZ: !Ref DBMultiAZ
+
+  LoadBalancerStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/loadbalancer.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+        VpcId: !GetAtt NetworkingStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkingStack.Outputs.PublicSubnetIds
+        AlbSecurityGroupId: !GetAtt NetworkingStack.Outputs.AlbSecurityGroupId
+
+  ComputeStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/compute.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        StudentName: !Ref StudentName
+        EnvironmentName: !Ref EnvironmentName
+        AppSubnetIds: !GetAtt NetworkingStack.Outputs.AppSubnetIds
+        AppSecurityGroupId: !GetAtt NetworkingStack.Outputs.AppSecurityGroupId
+        TargetGroupArn: !GetAtt LoadBalancerStack.Outputs.TargetGroupArn
+        InstanceType: !Ref InstanceType
+        MinSize: !Ref MinSize
+        MaxSize: !Ref MaxSize
+        DesiredCapacity: !Ref DesiredCapacity
+        DBEndpointAddress: !GetAtt DatabaseStack.Outputs.DBEndpointAddress
+        DBEndpointPort: !GetAtt DatabaseStack.Outputs.DBEndpointPort
+        DBName: !Ref DBName
+        DBSecretArn: !GetAtt DatabaseStack.Outputs.DBSecretArn
+
+Outputs:
+  ApplicationURL:
+    Description: Public URL of the three-tier application (web tier entry point).
+    Value: !Sub http://${LoadBalancerStack.Outputs.LoadBalancerDNSName}
+  VpcId:
+    Description: ID of the VPC.
+    Value: !GetAtt NetworkingStack.Outputs.VpcId
+  DatabaseEndpoint:
+    Description: Private endpoint of the RDS PostgreSQL instance.
+    Value: !GetAtt DatabaseStack.Outputs.DBEndpointAddress
+  DatabaseSecretArn:
+    Description: Secrets Manager ARN holding the RDS master credentials.
+    Value: !GetAtt DatabaseStack.Outputs.DBSecretArn

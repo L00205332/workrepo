@@ -1,0 +1,97 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Part A(a) - Static website for L00205332 (root stack).
+  Composes three nested-stack modules:
+    storage  - private, encrypted S3 bucket for the web pages
+    cdn      - CloudFront + Origin Access Control (public HTTPS endpoint)
+    content  - Lambda custom resource that publishes the pages
+  Package before deploying so the module paths are uploaded to S3:
+    aws cloudformation package --template-file static-site/main.yaml ...
+
+# ---------------------------------------------------------------------------
+# Parameters: set per environment in parameters/<env>.json
+# ---------------------------------------------------------------------------
+Parameters:
+  StudentName:
+    Type: String
+    Description: Full name shown in the website header.
+    MinLength: 1
+    MaxLength: 100
+
+  StudentId:
+    Type: String
+    Description: ATU student number (L-number) shown in the website header.
+    AllowedPattern: "^L[0-9]{8}$"
+    ConstraintDescription: Must be an ATU L-number, e.g. L00205332.
+
+  EnvironmentName:
+    Type: String
+    Description: Deployment environment, used in resource names and tags.
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+  PriceClass:
+    Type: String
+    Description: >-
+      CloudFront edge locations to use. PriceClass_100 (North America and
+      Europe) is the cheapest and suits an Ireland-based audience.
+    Default: PriceClass_100
+    AllowedValues: [PriceClass_100, PriceClass_200, PriceClass_All]
+
+Resources:
+  # Each TemplateURL is a local path; `aws cloudformation package` uploads the
+  # module to S3 and rewrites the path to the S3 URL.
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/storage.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+
+  CdnStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/cdn.yaml
+      Parameters:
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+        PriceClass: !Ref PriceClass
+        BucketName: !GetAtt StorageStack.Outputs.BucketName
+        BucketArn: !GetAtt StorageStack.Outputs.BucketArn
+        BucketRegionalDomainName: !GetAtt StorageStack.Outputs.BucketRegionalDomainName
+
+  # Depends on both modules through its parameters, so it is created last and
+  # deleted first (emptying the bucket before the storage module removes it).
+  ContentStack:
+    Type: AWS::CloudFormation::Stack
+    # Deleting the root stack deletes this module and everything in it.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: modules/content.yaml
+      Parameters:
+        StudentName: !Ref StudentName
+        StudentId: !Ref StudentId
+        EnvironmentName: !Ref EnvironmentName
+        RootStackName: !Ref AWS::StackName
+        BucketName: !GetAtt StorageStack.Outputs.BucketName
+        BucketArn: !GetAtt StorageStack.Outputs.BucketArn
+        DistributionId: !GetAtt CdnStack.Outputs.DistributionId
+
+Outputs:
+  WebsiteURL:
+    Description: Public HTTPS URL of the website.
+    Value: !Sub https://${CdnStack.Outputs.DistributionDomainName}
+  BucketName:
+    Description: S3 bucket that stores the website content.
+    Value: !GetAtt StorageStack.Outputs.BucketName
+  DistributionId:
+    Description: CloudFront distribution ID (for cache invalidations).
+    Value: !GetAtt CdnStack.Outputs.DistributionId

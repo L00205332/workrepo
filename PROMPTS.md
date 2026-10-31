@@ -261,6 +261,90 @@ commands to merge the static-site and three-tier templates as two separate PRs.
 
 ---
 
+### P16 (2026-10-27): Both design PRs merged
+
+**Prompt:** _(terminal output pasted showing branch, commit, push, merge and pull for
+`feature/static-site` and `feature/three-tier`)_
+
+**LLM response (summary):** Confirmed on GitHub that PRs #5 (static site) and #6 (three-tier)
+were merged and that local `main` was in sync. Proposed deploying the static site first, on a new
+branch for deployment and testing evidence.
+
+**My action:** _(fill in)_
+
+---
+
+### P17 (2026-10-31): Code review first; always destroy resources
+
+**Prompt:**
+> let me review the code first before we start deploying the stacks. also add to the project's md
+> that we always need to destroy the resources once we have finished, it's a free account after
+> all.
+
+**LLM response (summary):** Added an "always destroy the stacks" notice at the top of the README
+and a new section 10.1 with commands that confirm nothing is left running (stacks, EC2, RDS,
+load balancers, snapshots). Also filled in my name in the README header and corrected the
+repository structure, which listed folders that don't exist. Gave a review guide for the two
+templates.
+
+**My action:** Decided to review both templates myself before any deployment and made clean-up
+after every session a project rule.
+
+---
+
+### P18 (2026-10-31): Restructure into two projects with modules
+
+**Prompt:**
+> the code looks solid but i don't like the distribution of the files, let's consider the static
+> site and the the three tier as two separate projects inside the same repo, for each project we
+> need to have main.tf where we actually run the code, and for the resources let's have modules
+> like , compute(e.g. ec2 instances, ec2 auto scaling), networking (e.g. vpc, subnets, subnet
+> groups, security groups), database (e.g. RDS) and definitely you will need variables/parameters
+> file, what do you think ?
+
+**LLM response (summary):** Agreed with the modular layout. Pointed out that `main.tf` is
+Terraform naming; the CloudFormation equivalent is a root template (`main.yaml`) that composes
+**nested stacks** (`AWS::CloudFormation::Stack`) as modules, packaged with
+`aws cloudformation package`, plus JSON parameter files per environment. Proposed a folder
+layout for both projects, listed the trade-offs (an S3 bucket is needed for packaged templates;
+there is an extra packaging step), and asked for confirmation before refactoring.
+
+**My action:** Chose the modular layout (two projects, each a root stack plus modules and a
+parameters file), added a separate `loadbalancer` module for the web tier, and decided that I run
+every command myself.
+
+---
+
+### P19 (2026-10-31): Implement the modular refactor
+
+**Prompt:**
+> yes go ahead, add the loadbalancer module and apply other suggestions but always remember i will
+> be the one to run the commands, you just provide the code
+
+**LLM response (summary):** Refactored both single-file templates into nested-stack projects:
+- `static-site/`: `main.yaml` plus modules `storage`, `cdn` (CloudFront, OAC and bucket policy)
+  and `content` (Lambda deployer), and `parameters/dev.json`
+- `three-tier/`: `main.yaml` plus modules `networking` (VPC, subnets, route tables, security
+  groups, endpoints), `loadbalancer` (ALB, target group, listener), `compute` (IAM, launch
+  template, ASG, scaling) and `database` (subnet group, RDS), and `parameters/dev.json`
+- Input validation stays in the root stacks; modules pass outputs to each other with
+  `!GetAtt <Module>Stack.Outputs.<Name>`
+- Removed the old `templates/` folder. Updated `.cfnlintrc.yaml` to lint every root and module
+  template, and to ignore W3002 (local `TemplateURL`, intended for `package`). Added explicit
+  `DeletionPolicy` to the nested stacks (I3011).
+- Updated the README: repo structure, a "how nested stacks are deployed" section,
+  `package` + `deploy` commands with parameter files, and the artifacts-bucket setup and
+  clean-up.
+
+Checks: cfn-lint clean. A script confirmed every parameter passed to a module is declared,
+every required module parameter is passed, every `Outputs` reference exists, the parameter
+files only use known keys, and the embedded app code is unchanged. The suggestion to move the
+app code out of user data was deferred, as agreed. No commands were run against AWS or git.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title
