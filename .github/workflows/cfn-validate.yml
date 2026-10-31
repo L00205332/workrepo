@@ -47,6 +47,31 @@ jobs:
       - name: Run cfn-lint
         run: cfn-lint --non-zero-exit-code error
 
+  # The application tier source (three-tier/app/) is a real file, so it is
+  # linted and format-checked like any other code. Instances run Amazon Linux
+  # 2023's Python 3.9, so ruff targets that version.
+  app-lint:
+    name: app lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install "ruff==0.6.9"
+
+      - name: Lint
+        run: ruff check --target-version py39 three-tier/app
+
+      - name: Check formatting
+        run: ruff format --check --target-version py39 three-tier/app
+
   cfn-nag:
     name: cfn-nag (advisory)
     runs-on: ubuntu-latest

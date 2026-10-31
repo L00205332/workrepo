@@ -18,7 +18,7 @@ Metadata:
       - Label: { default: Network }
         Parameters: [VpcCidr, EnableSessionManager]
       - Label: { default: Application tier }
-        Parameters: [InstanceType, MinSize, MaxSize, DesiredCapacity]
+        Parameters: [InstanceType, MinSize, MaxSize, DesiredCapacity, ArtifactsBucketName, AppVersion]
       - Label: { default: Database tier }
         Parameters: [DBInstanceClass, DBName, DBUsername, DBAllocatedStorage, DBMultiAZ]
 
@@ -86,6 +86,22 @@ Parameters:
     Default: 2
     MinValue: 1
     MaxValue: 8
+
+  ArtifactsBucketName:
+    Type: String
+    Description: >-
+      S3 bucket that holds the packaged templates and the application releases.
+      Upload a release to s3://<bucket>/three-tier/app/<AppVersion>/ before deploying.
+    AllowedPattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
+    ConstraintDescription: Must be a valid S3 bucket name.
+
+  AppVersion:
+    Type: String
+    Description: >-
+      Application release to install (semantic version). Bump it whenever
+      three-tier/app/ changes; the new value triggers a rolling instance update.
+    AllowedPattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    ConstraintDescription: Must be a semantic version such as 1.0.0.
 
   DBInstanceClass:
     Type: String
@@ -192,6 +208,8 @@ Resources:
         DBEndpointPort: !GetAtt DatabaseStack.Outputs.DBEndpointPort
         DBName: !Ref DBName
         DBSecretArn: !GetAtt DatabaseStack.Outputs.DBSecretArn
+        ArtifactsBucketName: !Ref ArtifactsBucketName
+        AppVersion: !Ref AppVersion
 
 Outputs:
   ApplicationURL:
