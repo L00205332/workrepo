@@ -132,8 +132,10 @@ Parameters:
 
   DBMultiAZ:
     Type: String
-    Description: Run a synchronous standby database in the second AZ (doubles DB cost).
-    Default: "false"
+    Description: >-
+      Run a synchronous standby database in the second AZ, with automatic
+      failover. On by default for high availability; doubles the DB cost.
+    Default: "true"
     AllowedValues: ["true", "false"]
 
 Resources:
@@ -224,3 +226,6 @@ Outputs:
   DatabaseSecretArn:
     Description: Secrets Manager ARN holding the RDS master credentials.
     Value: !GetAtt DatabaseStack.Outputs.DBSecretArn
+  DatabaseInstanceId:
+    Description: RDS instance identifier (for failover tests and monitoring).
+    Value: !GetAtt DatabaseStack.Outputs.DBInstanceId

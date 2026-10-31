@@ -403,6 +403,29 @@ branch) and made cfn-nag advisory, keeping the F24 fix.
 
 ---
 
+### P22 (2026-10-31): Multi-AZ RDS
+
+**Prompt:**
+> committed, go ahead with Multi-AZ RDS
+
+**LLM response (summary):**
+- `DBMultiAZ` now defaults to `true` in the root stack and in `parameters/dev.json`.
+- Added explanatory comments on Multi-AZ failover behaviour to the database module, plus
+  non-overlapping off-peak windows: backups `02:00-03:00` and maintenance
+  `sun:03:30-sun:04:30` (UTC).
+- Exposed the RDS instance identifier as a new `DatabaseInstanceId` output, so failover can be
+  tested and the database monitored.
+- README: the architecture diagram now shows the primary and standby, with a note that every
+  tier spans both AZs. Added a "Database high availability" section (synchronous standby,
+  automatic failover, how the app behaves during failover, maintenance, and the cost trade-off
+  against Aurora). Updated the deploy-time (about 20 minutes) and cost (about $3-4/day)
+  estimates.
+- cfn-lint passes.
+
+**My action:** _(fill in)_
+
+---
+
 <!-- Template for new entries:
 
 ### Pn (YYYY-MM-DD): Short title

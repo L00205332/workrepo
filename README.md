@@ -12,7 +12,7 @@ This README is the lab write-up for the assignment.
 > **Always destroy the stacks when you finish.** This project runs on a free-tier AWS account
 > with limited credits. Every deploy session ends with the clean-up steps in
 > [section 10](#10-clean-up), followed by a check that nothing is left running. The three-tier
-> stack costs about $2-3 per day while it exists, even when idle.
+> stack costs about $3-4 per day while it exists, even when idle.
 
 ---
 
@@ -245,9 +245,15 @@ APP TIER  |  EC2 Auto Scaling group   |   private subnets 10.0.2.0/24, 10.0.3.0/
           +------------+-------------+
                        |  :5432 TLS (app security group only)
           +------------v-------------+
-DB TIER   |  RDS PostgreSQL           |   isolated subnets 10.0.4.0/24, 10.0.5.0/24
+DB TIER   |  RDS PostgreSQL Multi-AZ  |   isolated subnets 10.0.4.0/24, 10.0.5.0/24
+          |  primary (AZ a or b)      |   synchronous replication
+          |  standby (other AZ)       |   automatic failover, same endpoint
           +--------------------------+
 ```
+
+Every tier spans both Availability Zones: the ALB has a node in each public subnet, the Auto
+Scaling group keeps one instance per AZ, and the database runs Multi-AZ. Losing a whole AZ does
+not take the application down.
 
 | Path | Tier | What it does |
 |------|------|--------------|
@@ -260,9 +266,30 @@ DB TIER   |  RDS PostgreSQL           |   isolated subnets 10.0.4.0/24, 10.0.5.0
 | `networking.yaml` | All | VPC, 6 subnets, route tables, Internet Gateway, security groups, VPC endpoints |
 | `loadbalancer.yaml` | Web | Application Load Balancer, target group, HTTP listener |
 | `compute.yaml` | Application | IAM role, launch template (bootstrap script that installs the app release), Auto Scaling group, scaling policy |
-| `database.yaml` | Database | DB subnet group, RDS PostgreSQL instance |
+| `database.yaml` | Database | DB subnet group, RDS PostgreSQL instance (Multi-AZ, backup and maintenance windows) |
 
 Creation order: `networking`, then `database` and `loadbalancer` in parallel, then `compute`.
+
+#### Database high availability (Multi-AZ)
+
+`DBMultiAZ` defaults to `true` (see [`parameters/dev.json`](three-tier/parameters/dev.json)):
+
+- **Synchronous standby:** RDS keeps a standby replica in the other AZ, in the second isolated
+  DB subnet. Every committed write is stored in both AZs before it is acknowledged, so a
+  failover loses no committed data.
+- **Automatic failover:** if the primary, its AZ or its storage fails, RDS promotes the standby,
+  typically within 1-2 minutes, and repoints the endpoint DNS name. The application keeps the
+  same `DB_HOST`.
+- **Application side:** the app opens a new connection per request with a 5-second connect
+  timeout. During a failover, `/api/visits` returns `503 database unavailable` and then
+  recovers without a restart. `/api/health` does not touch the database, so the ALB keeps the
+  instances in service throughout.
+- **Maintenance:** with Multi-AZ, patches are applied to the standby first, followed by a
+  failover. This shortens the maintenance downtime. The windows are set off-peak (UTC): backups
+  `02:00-03:00`, maintenance `sun:03:30-sun:04:30`.
+- **Trade-off:** the standby doubles the database cost and cannot serve reads (a standby is not
+  a read replica). Aurora would add readable replicas and faster failover at a higher minimum
+  cost. Multi-AZ RDS was chosen as the cost-effective option for this lab.
 
 #### Application releases
 
@@ -323,9 +350,9 @@ aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='ApplicationURL'].OutputValue" --output text
 ```
 
-The first deployment takes about 15 minutes (RDS is the slowest resource). Running cost is
-about $2-3 per day (ALB, 2 x t4g.micro, db.t4g.micro, Secrets Manager endpoint), so delete
-the stack after testing.
+The first deployment takes about 20 minutes (Multi-AZ RDS is the slowest resource). Running
+cost is about $3-4 per day (ALB, 2 x t4g.micro, Multi-AZ db.t4g.micro, Secrets Manager
+endpoint), so delete the stack after testing.
 
 ### 5.3 Testing
 

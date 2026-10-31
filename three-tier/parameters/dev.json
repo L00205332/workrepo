@@ -14,5 +14,5 @@
   {"ParameterKey": "DBName", "ParameterValue": "appdb"},
   {"ParameterKey": "DBUsername", "ParameterValue": "dbadmin"},
   {"ParameterKey": "DBAllocatedStorage", "ParameterValue": "20"},
-  {"ParameterKey": "DBMultiAZ", "ParameterValue": "false"}
+  {"ParameterKey": "DBMultiAZ", "ParameterValue": "true"}
 ]
